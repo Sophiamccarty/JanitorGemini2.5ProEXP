@@ -1,9 +1,11 @@
 /*************************************************
- * server.js - Beispiel mit Node/Express + Axios + CORS
+ * server.js - Node/Express + Axios + CORS Proxy für JanitorAI
  *************************************************/
 const express = require('express');
 const axios = require('axios');
 const cors = require('cors');
+const http = require('http');
+const https = require('https');
 
 // Erzeuge eine Express-App
 const app = express();
@@ -12,18 +14,69 @@ const app = express();
 app.use(cors());
 
 // 2) JSON mit erhöhtem Limit parsen, z. B. 100MB
-//    So verhinderst du den 413 "Payload Too Large" Fehler.
 app.use(express.json({ limit: '100mb' }));
 
-// Deine Proxy-Route. Hier simulieren wir z. B. OpenAI-Style /v1/chat/completions
-app.post('/v1/chat/completions', async (req, res) => {
-  try {
-    // Log: sieh nach, was vom Client (z. B. Janitor) geschickt wird
-    console.log("== Neue Anfrage von Janitor? ==");
-    console.log("Request Body:", JSON.stringify(req.body));
+// 3) Server-Timeout konfigurieren
+app.use((req, res, next) => {
+  // 2 Minuten Timeout für Server-Antworten
+  res.setTimeout(120000);
+  next();
+});
 
+// 4) Axios-Instance mit Connection Pooling und Timeout
+const apiClient = axios.create({
+  // Connection Pooling aktivieren (verhindert zu viele TCP-Verbindungen)
+  httpAgent: new http.Agent({ keepAlive: true, maxSockets: 100 }),
+  httpsAgent: new https.Agent({ keepAlive: true, maxSockets: 100 }),
+  // Timeout für Anfragen (45 Sekunden)
+  timeout: 45000,
+  // Base URL
+  baseURL: 'https://openrouter.ai/api/v1'
+});
+
+// Hilfsfunktion für Retry-Logik
+async function makeRequestWithRetry(url, data, headers, maxRetries = 2) {
+  let lastError;
+  
+  for (let attempt = 0; attempt <= maxRetries; attempt++) {
+    try {
+      console.log(`API-Anfrage an OpenRouter (Versuch ${attempt + 1}/${maxRetries + 1})`);
+      
+      const response = await apiClient.post(url, data, { headers });
+      return response; // Erfolg! Beende Schleife und gib Response zurück
+      
+    } catch (error) {
+      lastError = error;
+      
+      // Prüfe, ob es ein Fehler ist, der ein Retry rechtfertigt
+      const status = error.response?.status;
+      
+      // 429 (Rate Limit) oder 5xx (Server-Fehler) rechtfertigen Retry
+      const shouldRetry = (status === 429 || (status >= 500 && status < 600));
+      
+      if (shouldRetry && attempt < maxRetries) {
+        // Exponential Backoff: 1s, 2s, 4s, ...
+        const delay = 1000 * Math.pow(2, attempt);
+        console.log(`Wiederhole in ${delay}ms (Status ${status})`);
+        await new Promise(resolve => setTimeout(resolve, delay));
+        continue;
+      }
+      
+      // Kein Retry möglich oder maximale Anzahl erreicht
+      throw error;
+    }
+  }
+  
+  throw lastError; // Sollte nie erreicht werden, aber zur Sicherheit
+}
+
+// Neue, einfachere Proxy-Route "/nofilter"
+app.post('/nofilter', async (req, res) => {
+  const requestTimestamp = new Date().toISOString();
+  console.log(`== Neue Anfrage über /nofilter (${requestTimestamp}) ==`);
+  
+  try {
     // API-Key aus dem Header oder als Query-Parameter extrahieren
-    // Wir prüfen zuerst den Authorization-Header
     let apiKey = null;
     
     // Option 1: Authorization Header - Bearer Format (Standard-Methode)
@@ -52,6 +105,10 @@ app.post('/v1/chat/completions', async (req, res) => {
       });
     }
 
+    // Request-Größe protokollieren
+    const bodySize = JSON.stringify(req.body).length;
+    console.log(`Anfragegröße: ~${Math.round(bodySize / 1024)} KB`);
+
     // Body übernehmen, den Janitor schickt
     const clientBody = req.body;
 
@@ -78,24 +135,26 @@ app.post('/v1/chat/completions', async (req, res) => {
       ],
     };
 
-    // Leite es an Openrouter weiter:
-    const response = await axios.post(
-      'https://openrouter.ai/api/v1/chat/completions', // Ziel
-      newBody,                                        // Body
-      {
-        headers: {
-          'Content-Type': 'application/json',
-          'Authorization': `Bearer ${apiKey}`, // Benutze den vom Client übermittelten API-Key
-        },
-      }
+    // Leite es an Openrouter weiter (mit Retry-Logik):
+    const headers = {
+      'Content-Type': 'application/json',
+      'Authorization': `Bearer ${apiKey}`,
+      'User-Agent': 'JanitorAI-Proxy/1.0',
+    };
+    
+    // Mit Retry-Logik anfragen
+    const response = await makeRequestWithRetry(
+      '/chat/completions',  // URL-Pfad (baseURL ist bereits konfiguriert)
+      newBody,              // Body
+      headers               // Headers
     );
 
     // Antwort von Openrouter an den Client zurückgeben
-    console.log("== Openrouter-Antwort ==", response.data);
+    console.log(`== Openrouter-Antwort erhalten (${new Date().toISOString()}) ==`);
     
     // Prüfe, ob es eine Fehlerantwort von Openrouter ist
     if (response.data.error) {
-      console.log("Fehler erkannt in Openrouter-Antwort");
+      console.log("Fehler erkannt in Openrouter-Antwort:", response.data.error);
       
       // Prüfe auf den Quota-Fehler in der Antwort
       if (response.data.error.code === 429 || 
@@ -103,7 +162,7 @@ app.post('/v1/chat/completions', async (req, res) => {
            response.data.error.metadata.raw.includes("You exceeded your current quota"))) {
         
         // Gib eine formatierte Antwort zurück, die Janitor versteht
-        return res.status(429).json({
+        return res.status(200).json({
           choices: [{
             message: {
               content: "ERROR: You exceeded your current quota. Please migrate to Gemini 2.5 Pro Preview for higher quota limits."
@@ -113,7 +172,7 @@ app.post('/v1/chat/completions', async (req, res) => {
       }
       
       // Andere Fehler
-      return res.status(response.data.error.code || 500).json({
+      return res.status(200).json({
         choices: [{
           message: {
             content: `ERROR: ${response.data.error.message || "Unknown error from provider"}`
@@ -125,58 +184,33 @@ app.post('/v1/chat/completions', async (req, res) => {
     // Wenn keine Fehler, normale Antwort zurückgeben
     return res.json(response.data);
 
-  }   catch (error) {
+  } catch (error) {
     // Log Details des Fehlers
-    console.error("Error in Proxy:", error.response?.data || error.message);
+    console.error("Error in Proxy:", error.message);
+    if (error.response) {
+      console.error("Status:", error.response.status);
+      console.error("Response data:", JSON.stringify(error.response.data));
+    }
     
     // Extrahiere Fehlermeldung
     let errorMessage = "Unknown error";
     
-    // Prüfe auf Quota-Fehler 429
-    if (error.response?.status === 429 || 
-        error.response?.data?.error?.code === 429 ||
-        (error.response?.data?.error?.metadata?.raw && 
-         error.response?.data?.error?.metadata?.raw.includes("You exceeded your current quota"))) {
-      
-      errorMessage = "You exceeded your current quota. Please migrate to Gemini 2.5 Pro Preview for higher quota limits.";
-    } else {
-      // Andere Fehler extrahieren
-      if (error.response?.data?.error?.message) {
-        errorMessage = error.response.data.error.message;
-      } else if (error.message) {
-        errorMessage = error.message;
-      }
+    // Prüfe auf verschiedene Fehlertypen
+    if (error.code === 'ECONNABORTED') {
+      errorMessage = "Request timeout: The API took too long to respond";
+    } else if (error.code === 'ECONNRESET') {
+      errorMessage = "Connection reset: The connection was interrupted";
+    } else if (error.message.includes('timeout')) {
+      errorMessage = "Connection timeout: The API didn't respond in time";
+    } else if (error.response?.status === 429) {
+      errorMessage = "Rate limit exceeded: Too many requests";
+    } else if (error.response?.data?.error?.message) {
+      errorMessage = error.response.data.error.message;
+    } else if (error.message) {
+      errorMessage = error.message;
     }
     
-    // Teste verschiedene Formate, die Janitor akzeptieren könnte
-    
-    // Format 1: Nur Text zurückgeben (kein JSON)
-    // return res.status(400).send(errorMessage);
-    
-    // Format 4: OpenAI-ähnliches Format
-    return res.status(200).json({
-      choices: [
-        {
-          message: {
-            content: `ERROR: Oops! Gemini is being stingy and you've hit your daily free limit. Either throw some money their way for "Gemini 2.5 Pro Preview" or we'll have to continue this lovely conversation tomorrow! Love you! ❤️`
-          }
-        }
-      ]
-    });
-    
-    // Falls Format 2 nicht funktioniert, versuchen Sie diese alternativen Formate:
-    
-    // Format 3: error.message
-    /*
-    return res.status(200).json({
-      error: {
-        message: errorMessage
-      }
-    });
-    */
-    
-    // Format 4: OpenAI-ähnliches Format
-    /*
+    // Konsistentes Fehlerformat für Janitor
     return res.status(200).json({
       choices: [
         {
@@ -186,22 +220,40 @@ app.post('/v1/chat/completions', async (req, res) => {
         }
       ]
     });
-    */
-    
-    // Format 5: Einfaches message-Format
-    /*
-    return res.status(200).json({
-      message: errorMessage
-    });
-    */
   }
+});
+
+// Für Abwärtskompatibilität alte Route beibehalten
+app.post('/v1/chat/completions', async (req, res) => {
+  const requestTimestamp = new Date().toISOString();
+  console.log(`== Neue Anfrage über alte Route /v1/chat/completions (${requestTimestamp}) ==`);
+  
+  // Weiterleitung zur neuen Route
+  req.url = '/nofilter';
+  app._router.handle(req, res);
 });
 
 // Einfache Statusroute hinzufügen
 app.get('/', (req, res) => {
   res.json({
     status: 'online',
-    usage: 'Diesen Proxy mit JanitorAI verwenden - API-Key bei JanitorAI eingeben'
+    version: '1.2.0',
+    info: 'JanitorAI ↔️ OpenRouter Proxy mit verbesserten Verbindungseinstellungen',
+    usage: 'Diesen Proxy mit JanitorAI verwenden - API-Key bei JanitorAI eingeben',
+    endpoints: {
+      proxy: '/nofilter',
+      legacy: '/v1/chat/completions (wird weitergeleitet)'
+    }
+  });
+});
+
+// Health-Check Endpoint für Monitoring
+app.get('/health', (req, res) => {
+  res.json({
+    status: 'healthy',
+    uptime: process.uptime(),
+    memory: process.memoryUsage(),
+    timestamp: new Date().toISOString()
   });
 });
 
@@ -209,4 +261,5 @@ app.get('/', (req, res) => {
 const PORT = process.env.PORT || 3000;
 app.listen(PORT, () => {
   console.log(`Proxy läuft auf Port ${PORT}`);
+  console.log(`${new Date().toISOString()} - Server gestartet`);
 });
