@@ -92,75 +92,94 @@ app.post('/v1/chat/completions', async (req, res) => {
 
     // Antwort von Openrouter an den Client zurückgeben
     console.log("== Openrouter-Antwort ==", response.data);
+    
+    // Prüfe, ob es eine Fehlerantwort von Openrouter ist
+    if (response.data.error) {
+      console.log("Fehler erkannt in Openrouter-Antwort");
+      
+      // Prüfe auf den Quota-Fehler in der Antwort
+      if (response.data.error.code === 429 || 
+          (response.data.error.metadata?.raw && 
+           response.data.error.metadata.raw.includes("You exceeded your current quota"))) {
+        
+        // Gib eine formatierte Antwort zurück, die Janitor versteht
+        return res.status(429).json({
+          choices: [{
+            message: {
+              content: "ERROR: You exceeded your current quota. Please migrate to Gemini 2.5 Pro Preview for higher quota limits."
+            }
+          }]
+        });
+      }
+      
+      // Andere Fehler
+      return res.status(response.data.error.code || 500).json({
+        choices: [{
+          message: {
+            content: `ERROR: ${response.data.error.message || "Unknown error from provider"}`
+          }
+        }]
+      });
+    }
+    
+    // Wenn keine Fehler, normale Antwort zurückgeben
     return res.json(response.data);
 
   }   catch (error) {
     // Log Details des Fehlers
     console.error("Error in Proxy:", error.response?.data || error.message);
     
-    // Formatiere die Antwort, sodass Janitor sie richtig darstellen kann
-    // Überprüfe verschiedene mögliche Fehlerformate
+    // Versuche, einen für Janitor verständlichen Fehler zu erstellen
+    // JanitorAI erwartet ein Antwortformat wie bei erfolgreicher Anfrage
+    // mit choices[0].message.content für die Anzeige des Inhalts
     
-    // Wenn die Fehlermeldung tief in metadata.raw eingebettet ist (wie im Beispiel)
-    if (error.response?.data?.error?.metadata?.raw) {
-      try {
-        // Versuche, den raw-String zu parsen, wenn es ein JSON-String ist
-        const rawData = JSON.parse(error.response.data.error.metadata.raw);
-        
-        // Prüfe auf spezifischen Quota-Fehler
-        if (rawData.error?.code === 429 && rawData.error?.message?.includes("You exceeded your current quota")) {
-          return res.status(429).json({
-            error: "You exceeded your current quota. Please migrate to Gemini 2.5 Pro Preview for higher quota limits. For more information: https://ai.google.dev/gemini-api/docs/rate-limits"
-          });
-        }
-        
-        // Falls es ein anderer Fehler im raw-Format ist
-        return res.status(rawData.error?.code || 500).json({
-          error: rawData.error?.message || "Error from provider"
-        });
-      } catch (parseError) {
-        // Falls das Parsen fehlschlägt, extrahiere den Text direkt
-        const rawText = error.response.data.error.metadata.raw;
-        if (rawText.includes("You exceeded your current quota")) {
-          return res.status(429).json({
-            error: "You exceeded your current quota. Please migrate to Gemini 2.5 Pro Preview for higher quota limits. For more information: https://ai.google.dev/gemini-api/docs/rate-limits"
-          });
-        }
-      }
-    }
-    
-    // Prüfe direkt auf den spezifischen Quota-Fehler
+    // Prüfe auf Quota-Fehler 429
     if (error.response?.status === 429 || 
         error.response?.data?.error?.code === 429 ||
-        (typeof error.response?.data === 'string' && error.response.data.includes("You exceeded your current quota"))) {
+        (error.response?.data?.error?.metadata?.raw && 
+         error.response?.data?.error?.metadata?.raw.includes("You exceeded your current quota"))) {
+        
+      console.log("Quota-Fehler erkannt!");
       
-      return res.status(429).json({
-        error: "You exceeded your current quota. Please migrate to Gemini 2.5 Pro Preview for higher quota limits. For more information: https://ai.google.dev/gemini-api/docs/rate-limits"
+      // Sende Fehler im Format, das Janitor anzeigen kann
+      return res.status(200).json({
+        choices: [{
+          message: {
+            role: "assistant",
+            content: "ERROR: You exceeded your current quota. Please migrate to Gemini 2.5 Pro Preview for higher quota limits."
+          }
+        }]
       });
     }
     
-    // Standardfehlerbehandlung für andere Fälle
-    const statusCode = error.response?.status || 500;
+    // Für andere Fehler
+    let errorMessage = "Unknown error";
     
-    // Extrahiere die Fehlermeldung aus verschiedenen möglichen Pfaden
-    let errorMessage;
-    if (typeof error.response?.data === 'string') {
-      errorMessage = error.response.data;
-    } else if (error.response?.data?.error?.message) {
+    // Versuche, die Fehlermeldung aus verschiedenen möglichen Stellen zu extrahieren
+    if (error.response?.data?.error?.message) {
       errorMessage = error.response.data.error.message;
-    } else if (error.response?.data?.error) {
-      errorMessage = typeof error.response.data.error === 'string' 
-        ? error.response.data.error 
-        : JSON.stringify(error.response.data.error);
+    } else if (error.response?.data?.error?.metadata?.raw) {
+      try {
+        const rawData = JSON.parse(error.response.data.error.metadata.raw);
+        if (rawData.error?.message) {
+          errorMessage = rawData.error.message;
+        }
+      } catch (e) {
+        // Wenn Parsen fehlschlägt, nutze den raw-String direkt
+        errorMessage = error.response.data.error.metadata.raw.substring(0, 500);
+      }
     } else if (error.message) {
       errorMessage = error.message;
-    } else {
-      errorMessage = 'Error in proxy request';
     }
     
-    // Einfacher String als Fehlermeldung, damit Janitor ihn korrekt anzeigt
-    return res.status(statusCode).json({
-      error: errorMessage
+    // Sende Fehler im Format, das Janitor anzeigen kann
+    return res.status(200).json({
+      choices: [{
+        message: {
+          role: "assistant",
+          content: `ERROR: ${errorMessage}`
+        }
+      }]
     });
   }
 });
