@@ -168,7 +168,7 @@ async function handleProxyRequestWithModel(req, res, forceModel = null) {
         return res.status(200).json({
           choices: [{
             message: {
-              content: "ERROR: You exceeded your current quota. Please migrate to Gemini 2.5 Pro Preview for higher quota limits."
+              content: "Sorry my love, Gemini is unfortunately a bit stingy and you’re either too fast, (Wait a few seconds, because the free version only allows a few requests per minute.) or you’ve used up your free messages for the day in the free version. In that case, you either need to switch to the paid version or wait until tomorrow. I’m sorry! Sending you a big hug! <3"
             }
           }]
         });
