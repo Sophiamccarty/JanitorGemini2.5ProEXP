@@ -94,33 +94,73 @@ app.post('/v1/chat/completions', async (req, res) => {
     console.log("== Openrouter-Antwort ==", response.data);
     return res.json(response.data);
 
-  } catch (error) {
-    // Verbesserte Fehlerbehandlung mit unterschiedlichen Statuscode-Weitergabe
+  }   catch (error) {
+    // Log Details des Fehlers
     console.error("Error in Proxy:", error.response?.data || error.message);
     
-    // Prüfe auf den spezifischen Quota-Fehler (429)
-    if (error.response?.status === 429 && 
-        error.response?.data?.error?.message?.includes("You exceeded your current quota")) {
-      
-      // Englische Fehlermeldung für Janitor
-      return res.status(429).json({
-        error: {
-          message: "You exceeded your current quota. Please migrate to Gemini 2.5 Pro Preview (models/gemini-2.5-pro-preview-03-25) for higher quota limits. For more information on this error, visit: https://ai.google.dev/gemini-api/docs/rate-limits"
+    // Formatiere die Antwort, sodass Janitor sie richtig darstellen kann
+    // Überprüfe verschiedene mögliche Fehlerformate
+    
+    // Wenn die Fehlermeldung tief in metadata.raw eingebettet ist (wie im Beispiel)
+    if (error.response?.data?.error?.metadata?.raw) {
+      try {
+        // Versuche, den raw-String zu parsen, wenn es ein JSON-String ist
+        const rawData = JSON.parse(error.response.data.error.metadata.raw);
+        
+        // Prüfe auf spezifischen Quota-Fehler
+        if (rawData.error?.code === 429 && rawData.error?.message?.includes("You exceeded your current quota")) {
+          return res.status(429).json({
+            error: "You exceeded your current quota. Please migrate to Gemini 2.5 Pro Preview for higher quota limits. For more information: https://ai.google.dev/gemini-api/docs/rate-limits"
+          });
         }
+        
+        // Falls es ein anderer Fehler im raw-Format ist
+        return res.status(rawData.error?.code || 500).json({
+          error: rawData.error?.message || "Error from provider"
+        });
+      } catch (parseError) {
+        // Falls das Parsen fehlschlägt, extrahiere den Text direkt
+        const rawText = error.response.data.error.metadata.raw;
+        if (rawText.includes("You exceeded your current quota")) {
+          return res.status(429).json({
+            error: "You exceeded your current quota. Please migrate to Gemini 2.5 Pro Preview for higher quota limits. For more information: https://ai.google.dev/gemini-api/docs/rate-limits"
+          });
+        }
+      }
+    }
+    
+    // Prüfe direkt auf den spezifischen Quota-Fehler
+    if (error.response?.status === 429 || 
+        error.response?.data?.error?.code === 429 ||
+        (typeof error.response?.data === 'string' && error.response.data.includes("You exceeded your current quota"))) {
+      
+      return res.status(429).json({
+        error: "You exceeded your current quota. Please migrate to Gemini 2.5 Pro Preview for higher quota limits. For more information: https://ai.google.dev/gemini-api/docs/rate-limits"
       });
     }
     
-    // Wenn es sich um einen anderen Fehler von Openrouter handelt, gib dessen Statuscode weiter
+    // Standardfehlerbehandlung für andere Fälle
     const statusCode = error.response?.status || 500;
-    const errorMessage = error.response?.data?.error?.message || 
-                        error.response?.data || 
-                        error.message || 
-                        'Error in proxy request';
     
+    // Extrahiere die Fehlermeldung aus verschiedenen möglichen Pfaden
+    let errorMessage;
+    if (typeof error.response?.data === 'string') {
+      errorMessage = error.response.data;
+    } else if (error.response?.data?.error?.message) {
+      errorMessage = error.response.data.error.message;
+    } else if (error.response?.data?.error) {
+      errorMessage = typeof error.response.data.error === 'string' 
+        ? error.response.data.error 
+        : JSON.stringify(error.response.data.error);
+    } else if (error.message) {
+      errorMessage = error.message;
+    } else {
+      errorMessage = 'Error in proxy request';
+    }
+    
+    // Einfacher String als Fehlermeldung, damit Janitor ihn korrekt anzeigt
     return res.status(statusCode).json({
-      error: {
-        message: errorMessage
-      }
+      error: errorMessage
     });
   }
 });
