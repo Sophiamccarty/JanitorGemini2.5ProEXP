@@ -70,8 +70,8 @@ async function makeRequestWithRetry(url, data, headers, maxRetries = 2) {
   throw lastError; // Sollte nie erreicht werden, aber zur Sicherheit
 }
 
-// Die gemeinsame Proxy-Logik als Funktion für beide Routen
-async function handleProxyRequest(req, res) {
+// Erweiterte Proxy-Logik mit optionalem Model-Override
+async function handleProxyRequestWithModel(req, res, forceModel = null) {
   try {
     // API-Key aus dem Header oder als Query-Parameter extrahieren
     let apiKey = null;
@@ -109,7 +109,7 @@ async function handleProxyRequest(req, res) {
     // Body übernehmen, den Janitor schickt
     const clientBody = req.body;
 
-    // Du fügst hier die safety_settings hinzu
+    // Safety settings hinzufügen und ggf. das vorgegebene Modell
     const newBody = {
       ...clientBody,
       safety_settings: [
@@ -131,6 +131,12 @@ async function handleProxyRequest(req, res) {
         },
       ],
     };
+
+    // Wenn ein Modell erzwungen werden soll, überschreibe das vom Client gesendete
+    if (forceModel) {
+      console.log(`Überschreibe Modell mit: ${forceModel}`);
+      newBody.model = forceModel;
+    }
 
     // Leite es an Openrouter weiter (mit Retry-Logik):
     const headers = {
@@ -220,30 +226,52 @@ async function handleProxyRequest(req, res) {
   }
 }
 
-// Neue, einfachere Proxy-Route "/nofilter"
+// Die gemeinsame Proxy-Logik als Funktion für beide bestehenden Routen
+async function handleProxyRequest(req, res) {
+  // Ruft die erweiterte Funktion ohne Model-Override auf
+  return handleProxyRequestWithModel(req, res);
+}
+
+// Route "/free" - Erzwingt das kostenlose Gemini-Modell
+app.post('/free', async (req, res) => {
+  const requestTimestamp = new Date().toISOString();
+  console.log(`== Neue Anfrage über /free (${requestTimestamp}) ==`);
+  await handleProxyRequestWithModel(req, res, "google/gemini-2.5-pro-exp-03-25:free");
+});
+
+// Route "/cash" - Erzwingt das kostenpflichtige Gemini-Modell
+app.post('/cash', async (req, res) => {
+  const requestTimestamp = new Date().toISOString();
+  console.log(`== Neue Anfrage über /cash (${requestTimestamp}) ==`);
+  await handleProxyRequestWithModel(req, res, "google/gemini-2.5-pro-preview-03-25");
+});
+
+// Bestehende Proxy-Route "/nofilter" - Modell frei wählbar
 app.post('/nofilter', async (req, res) => {
   const requestTimestamp = new Date().toISOString();
   console.log(`== Neue Anfrage über /nofilter (${requestTimestamp}) ==`);
   await handleProxyRequest(req, res);
 });
 
-// Für Abwärtskompatibilität alte Route beibehalten
+// Für Abwärtskompatibilität alte Route beibehalten - Modell frei wählbar
 app.post('/v1/chat/completions', async (req, res) => {
   const requestTimestamp = new Date().toISOString();
   console.log(`== Neue Anfrage über alte Route /v1/chat/completions (${requestTimestamp}) ==`);
   await handleProxyRequest(req, res);
 });
 
-// Einfache Statusroute hinzufügen
+// Einfache Statusroute aktualisieren mit neuen Endpunkten
 app.get('/', (req, res) => {
   res.json({
     status: 'online',
-    version: '1.2.0',
+    version: '1.3.0',
     info: 'JanitorAI ↔️ OpenRouter Proxy mit verbesserten Verbindungseinstellungen',
     usage: 'Diesen Proxy mit JanitorAI verwenden - API-Key bei JanitorAI eingeben',
     endpoints: {
-      proxy: '/nofilter',
-      legacy: '/v1/chat/completions'
+      standard: '/nofilter',          // Standard-Route ohne Modellzwang
+      legacy: '/v1/chat/completions', // Legacy-Route ohne Modellzwang
+      free: '/free',                  // Route mit kostenlosem Gemini-Modell
+      paid: '/cash'                   // Route mit kostenpflichtigem Gemini-Modell
     }
   });
 });
