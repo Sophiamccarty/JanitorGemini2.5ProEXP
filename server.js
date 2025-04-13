@@ -129,58 +129,65 @@ app.post('/v1/chat/completions', async (req, res) => {
     // Log Details des Fehlers
     console.error("Error in Proxy:", error.response?.data || error.message);
     
-    // Versuche, einen für Janitor verständlichen Fehler zu erstellen
-    // JanitorAI erwartet ein Antwortformat wie bei erfolgreicher Anfrage
-    // mit choices[0].message.content für die Anzeige des Inhalts
+    // Extrahiere Fehlermeldung
+    let errorMessage = "Unknown error";
     
     // Prüfe auf Quota-Fehler 429
     if (error.response?.status === 429 || 
         error.response?.data?.error?.code === 429 ||
         (error.response?.data?.error?.metadata?.raw && 
          error.response?.data?.error?.metadata?.raw.includes("You exceeded your current quota"))) {
-        
-      console.log("Quota-Fehler erkannt!");
       
-      // Sende Fehler im Format, das Janitor anzeigen kann
-      return res.status(200).json({
-        choices: [{
-          message: {
-            role: "assistant",
-            content: "ERROR: You exceeded your current quota. Please migrate to Gemini 2.5 Pro Preview for higher quota limits."
-          }
-        }]
-      });
-    }
-    
-    // Für andere Fehler
-    let errorMessage = "Unknown error";
-    
-    // Versuche, die Fehlermeldung aus verschiedenen möglichen Stellen zu extrahieren
-    if (error.response?.data?.error?.message) {
-      errorMessage = error.response.data.error.message;
-    } else if (error.response?.data?.error?.metadata?.raw) {
-      try {
-        const rawData = JSON.parse(error.response.data.error.metadata.raw);
-        if (rawData.error?.message) {
-          errorMessage = rawData.error.message;
-        }
-      } catch (e) {
-        // Wenn Parsen fehlschlägt, nutze den raw-String direkt
-        errorMessage = error.response.data.error.metadata.raw.substring(0, 500);
+      errorMessage = "You exceeded your current quota. Please migrate to Gemini 2.5 Pro Preview for higher quota limits.";
+    } else {
+      // Andere Fehler extrahieren
+      if (error.response?.data?.error?.message) {
+        errorMessage = error.response.data.error.message;
+      } else if (error.message) {
+        errorMessage = error.message;
       }
-    } else if (error.message) {
-      errorMessage = error.message;
     }
     
-    // Sende Fehler im Format, das Janitor anzeigen kann
+    // Teste verschiedene Formate, die Janitor akzeptieren könnte
+    
+    // Format 1: Nur Text zurückgeben (kein JSON)
+    // return res.status(400).send(errorMessage);
+    
+    // Format 2: error als String (flach)
     return res.status(200).json({
-      choices: [{
-        message: {
-          role: "assistant",
-          content: `ERROR: ${errorMessage}`
-        }
-      }]
+      error: errorMessage
     });
+    
+    // Falls Format 2 nicht funktioniert, versuchen Sie diese alternativen Formate:
+    
+    // Format 3: error.message
+    /*
+    return res.status(200).json({
+      error: {
+        message: errorMessage
+      }
+    });
+    */
+    
+    // Format 4: OpenAI-ähnliches Format
+    /*
+    return res.status(200).json({
+      choices: [
+        {
+          message: {
+            content: `ERROR: ${errorMessage}`
+          }
+        }
+      ]
+    });
+    */
+    
+    // Format 5: Einfaches message-Format
+    /*
+    return res.status(200).json({
+      message: errorMessage
+    });
+    */
   }
 });
 
