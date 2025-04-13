@@ -98,15 +98,29 @@ app.post('/v1/chat/completions', async (req, res) => {
     // Verbesserte Fehlerbehandlung mit unterschiedlichen Statuscode-Weitergabe
     console.error("Error in Proxy:", error.response?.data || error.message);
     
-    // Wenn es sich um einen Fehler von Openrouter handelt, gib dessen Statuscode weiter
+    // Prüfe auf den spezifischen Quota-Fehler (429)
+    if (error.response?.status === 429 && 
+        error.response?.data?.error?.message?.includes("You exceeded your current quota")) {
+      
+      // Englische Fehlermeldung für Janitor
+      return res.status(429).json({
+        error: {
+          message: "You exceeded your current quota. Please migrate to Gemini 2.5 Pro Preview (models/gemini-2.5-pro-preview-03-25) for higher quota limits. For more information on this error, visit: https://ai.google.dev/gemini-api/docs/rate-limits"
+        }
+      });
+    }
+    
+    // Wenn es sich um einen anderen Fehler von Openrouter handelt, gib dessen Statuscode weiter
     const statusCode = error.response?.status || 500;
     const errorMessage = error.response?.data?.error?.message || 
                         error.response?.data || 
                         error.message || 
-                        'Fehler beim Proxy-Request';
+                        'Error in proxy request';
     
     return res.status(statusCode).json({
-      error: errorMessage,
+      error: {
+        message: errorMessage
+      }
     });
   }
 });
