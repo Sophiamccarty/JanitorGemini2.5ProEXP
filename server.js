@@ -153,9 +153,15 @@ app.post('/v1/chat/completions', async (req, res) => {
     // Format 1: Nur Text zurückgeben (kein JSON)
     // return res.status(400).send(errorMessage);
     
-    // Format 2: error als String (flach)
+    // Format 4: OpenAI-ähnliches Format
     return res.status(200).json({
-      error: errorMessage
+      choices: [
+        {
+          message: {
+            content: `ERROR: Oops! Gemini is being stingy and you've hit your daily free limit. Either throw some money their way for "Gemini 2.5 Pro Preview" or we'll have to continue this lovely conversation tomorrow! Love you! ❤️`
+          }
+        }
+      ]
     });
     
     // Falls Format 2 nicht funktioniert, versuchen Sie diese alternativen Formate:
