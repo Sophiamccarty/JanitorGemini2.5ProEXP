@@ -70,11 +70,8 @@ async function makeRequestWithRetry(url, data, headers, maxRetries = 2) {
   throw lastError; // Sollte nie erreicht werden, aber zur Sicherheit
 }
 
-// Neue, einfachere Proxy-Route "/nofilter"
-app.post('/nofilter', async (req, res) => {
-  const requestTimestamp = new Date().toISOString();
-  console.log(`== Neue Anfrage über /nofilter (${requestTimestamp}) ==`);
-  
+// Die gemeinsame Proxy-Logik als Funktion für beide Routen
+async function handleProxyRequest(req, res) {
   try {
     // API-Key aus dem Header oder als Query-Parameter extrahieren
     let apiKey = null;
@@ -142,9 +139,9 @@ app.post('/nofilter', async (req, res) => {
       'User-Agent': 'JanitorAI-Proxy/1.0',
     };
     
-    // Mit Retry-Logik anfragen
+    // Mit Retry-Logik anfragen - immer an den korrekten OpenRouter-Endpunkt
     const response = await makeRequestWithRetry(
-      '/chat/completions',  // URL-Pfad (baseURL ist bereits konfiguriert)
+      '/chat/completions',  // Wichtig: Der richtige OpenRouter-Endpunkt
       newBody,              // Body
       headers               // Headers
     );
@@ -221,16 +218,20 @@ app.post('/nofilter', async (req, res) => {
       ]
     });
   }
+}
+
+// Neue, einfachere Proxy-Route "/nofilter"
+app.post('/nofilter', async (req, res) => {
+  const requestTimestamp = new Date().toISOString();
+  console.log(`== Neue Anfrage über /nofilter (${requestTimestamp}) ==`);
+  await handleProxyRequest(req, res);
 });
 
 // Für Abwärtskompatibilität alte Route beibehalten
 app.post('/v1/chat/completions', async (req, res) => {
   const requestTimestamp = new Date().toISOString();
   console.log(`== Neue Anfrage über alte Route /v1/chat/completions (${requestTimestamp}) ==`);
-  
-  // Weiterleitung zur neuen Route
-  req.url = '/nofilter';
-  app._router.handle(req, res);
+  await handleProxyRequest(req, res);
 });
 
 // Einfache Statusroute hinzufügen
@@ -242,7 +243,7 @@ app.get('/', (req, res) => {
     usage: 'Diesen Proxy mit JanitorAI verwenden - API-Key bei JanitorAI eingeben',
     endpoints: {
       proxy: '/nofilter',
-      legacy: '/v1/chat/completions (wird weitergeleitet)'
+      legacy: '/v1/chat/completions'
     }
   });
 });
