@@ -168,7 +168,7 @@ async function handleProxyRequestWithModel(req, res, forceModel = null) {
         return res.status(200).json({
           choices: [{
             message: {
-              content: "Sorry my love, Gemini is unfortunately a bit stingy and you’re either too fast, (Wait a few seconds, because the free version only allows a few requests per minute.) or you’ve used up your free messages for the day in the free version. In that case, you either need to switch to the paid version or wait until tomorrow. I’m sorry! Sending you a big hug! <3"
+              content: "Sorry my love, Gemini is unfortunately a bit stingy and you're either too fast, (Wait a few seconds, because the free version only allows a few requests per minute.) or you've used up your free messages for the day in the free version. In that case, you either need to switch to the paid version or wait until tomorrow. I'm sorry! Sending you a big hug! <3"
             }
           }]
         });
@@ -211,6 +211,23 @@ async function handleProxyRequestWithModel(req, res, forceModel = null) {
       errorMessage = error.response.data.error.message;
     } else if (error.message) {
       errorMessage = error.message;
+    }
+    
+    // Spezifische Fehlerbehandlung für den pgshag2-Fehler
+    if (error.message?.includes('pgshag2') || 
+        error.response?.data?.error?.message?.includes('pgshag2') ||
+        error.response?.data?.error?.includes('No response from bot (pgshag2)') ||
+        errorMessage.includes('pgshag2')) {
+      // Neue benutzerdefinierte Fehlermeldung für pgshag2-Fehler
+      return res.status(200).json({
+        choices: [
+          {
+            message: {
+              content: "Unfortunately, Gemini is being difficult and finds your content too 'extreme'. The paid version 'Gemini 2.5 Pro Preview' works without problems for NSFW/Violence content."
+            }
+          }
+        ]
+      });
     }
     
     // Konsistentes Fehlerformat für Janitor
