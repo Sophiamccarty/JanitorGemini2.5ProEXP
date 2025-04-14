@@ -188,6 +188,21 @@ async function handleProxyRequestWithModel(req, res, forceModel = null) {
     console.log("OpenRouter response headers:", JSON.stringify(response.headers));
     console.log("OpenRouter response data:", JSON.stringify(response.data));
 
+    // Prüfen auf leere Antwort (typisch für Gemini-Content-Filter)
+    if (response.data?.choices?.length > 0 && 
+        response.data.choices[0]?.message?.content === "" && 
+        response.data.usage?.completion_tokens === 0) {
+      
+      console.log("Detected empty content response from Gemini (likely content filtered)");
+      return res.status(200).json({
+        choices: [{
+          message: {
+            content: "Unfortunately, Gemini is being difficult and finds your content too 'extreme'. The paid version 'Gemini 2.5 Pro Preview' works without problems for NSFW/Violence content."
+          }
+        }]
+      });
+    }
+
     // Prüfen, ob es sich um unser spezielles pgshag2-Fehler-Objekt handelt
     if (response.data?.pgshag2_error) {
       console.log("Found custom pgshag2 error object, returning custom message");
