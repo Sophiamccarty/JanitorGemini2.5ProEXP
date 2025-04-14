@@ -174,6 +174,21 @@ async function handleProxyRequestWithModel(req, res, forceModel = null) {
         });
       }
       
+      // Prüfe auf pgshag2-Fehler in der Antwort (Gemini Content-Filter)
+      if (response.data.error.message?.includes('pgshag2') || 
+          response.data.error.message?.includes('No response from bot') || 
+          JSON.stringify(response.data.error).includes('pgshag2')) {
+        
+        // Gib eine formatierte Antwort zurück, die Janitor versteht
+        return res.status(200).json({
+          choices: [{
+            message: {
+              content: "Unfortunately, Gemini is being difficult and finds your content too 'extreme'. The paid version 'Gemini 2.5 Pro Preview' works without problems for NSFW/Violence content."
+            }
+          }]
+        });
+      }
+      
       // Andere Fehler
       return res.status(200).json({
         choices: [{
@@ -213,12 +228,13 @@ async function handleProxyRequestWithModel(req, res, forceModel = null) {
       errorMessage = error.message;
     }
     
-    // Spezifische Fehlerbehandlung für den pgshag2-Fehler
-    if (error.message?.includes('pgshag2') || 
-        error.response?.data?.error?.message?.includes('pgshag2') ||
-        error.response?.data?.error?.includes('No response from bot (pgshag2)') ||
+    // Check if this is a pgshag2 error from the catch block
+    if (error.response?.data?.error?.message?.includes('pgshag2') || 
+        error.response?.data?.error?.message?.includes('No response from bot') ||
+        JSON.stringify(error.response?.data?.error || {}).includes('pgshag2') ||
         errorMessage.includes('pgshag2')) {
-      // Neue benutzerdefinierte Fehlermeldung für pgshag2-Fehler
+      console.log("Detected pgshag2 error in catch block");
+      // Custom error message for content filtering
       return res.status(200).json({
         choices: [
           {
