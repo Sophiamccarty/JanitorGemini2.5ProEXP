@@ -44,14 +44,14 @@ async function makeRequestWithRetry(url, data, headers, maxRetries = 2) {
       
       const response = await apiClient.post(url, data, { headers });
       
-      // Prüfen auf leere Antwort (Content-Filter) und Handling direkt hier
+      // Prüfen auf leere Antwort (typisch für Content-Filter)
       if (response.data?.choices?.[0]?.message?.content === "" && 
           response.data.usage?.completion_tokens === 0) {
-        console.log("Detected content filter in makeRequestWithRetry");
+        console.log("Gemini Content-Filter erkannt (leere Antwort)");
         return {
           status: 200,
           data: {
-            pgshag2_error: true
+            content_filtered: true
           }
         };
       }
@@ -168,24 +168,9 @@ async function handleProxyRequestWithModel(req, res, forceModel = null) {
     // Antwort von Openrouter an den Client zurückgeben
     console.log(`== Openrouter-Antwort erhalten (${new Date().toISOString()}) ==`);
 
-    // Prüfen auf leere Antwort (typisch für Gemini-Content-Filter)
-    if (response.data?.choices?.length > 0 && 
-        response.data.choices[0]?.message?.content === "" && 
-        response.data.usage?.completion_tokens === 0) {
-      
-      console.log("Detected empty content response from Gemini (content filtered)");
-      return res.status(200).json({
-        choices: [{
-          message: {
-            content: "Unfortunately, Gemini is being difficult and finds your content too 'extreme'. The paid version 'Gemini 2.5 Pro Preview' works without problems for NSFW/Violence content."
-          }
-        }]
-      });
-    }
-
-    // Prüfen, ob es sich um unser spezielles pgshag2-Fehler-Objekt handelt
-    if (response.data?.pgshag2_error) {
-      console.log("Found custom pgshag2 error object");
+    // Prüfen auf Content-Filter (durch leere Antwort)
+    if (response.data?.content_filtered) {
+      console.log("Sende Gemini Content-Filter-Meldung");
       return res.status(200).json({
         choices: [{
           message: {
@@ -197,7 +182,7 @@ async function handleProxyRequestWithModel(req, res, forceModel = null) {
     
     // Prüfe, ob es eine Fehlerantwort von Openrouter ist
     if (response.data.error) {
-      console.log("Fehler erkannt in Openrouter-Antwort:", response.data.error);
+      console.log("Fehler erkannt in Openrouter-Antwort");
       
       // Prüfe auf den Quota-Fehler in der Antwort
       if (response.data.error.code === 429 || 
@@ -214,15 +199,10 @@ async function handleProxyRequestWithModel(req, res, forceModel = null) {
         });
       }
       
-      // Prüfe auf Content-Filter Fehler (PROHIBITED_CONTENT, 403, pgshag2)
+      // Prüfe auf Content-Filter Fehler
       if (response.data.error.code === 403 || 
-          response.data.error.message?.includes('PROHIBITED_CONTENT') || 
-          response.data.error.message?.includes('pgshag2') || 
-          response.data.error.message?.includes('No response from bot') || 
-          JSON.stringify(response.data.error).includes('pgshag2') ||
-          JSON.stringify(response.data.error).includes('PROHIBITED_CONTENT')) {
+          response.data.error.message?.includes('PROHIBITED_CONTENT')) {
         
-        // Gib eine formatierte Antwort zurück, die Janitor versteht
         return res.status(200).json({
           choices: [{
             message: {
@@ -246,28 +226,10 @@ async function handleProxyRequestWithModel(req, res, forceModel = null) {
     return res.json(response.data);
 
   } catch (error) {
-    // Log Details des Fehlers
+    // Log Details des Fehlers (knapp)
     console.error("Error in Proxy:", error.message);
     if (error.response) {
       console.error("Status:", error.response.status);
-    }
-    
-    // Check for content filter errors in a simplified way
-    if (error.response?.status === 403 ||
-        error.response?.data?.error?.code === 403 ||
-        error.message?.includes('PROHIBITED_CONTENT') ||
-        error.message?.includes('pgshag2') || 
-        error.message?.includes('No response from bot')) {
-      console.log("Detected content filter error in catch block");
-      return res.status(200).json({
-        choices: [
-          {
-            message: {
-              content: "Unfortunately, Gemini is being difficult and finds your content too 'extreme'. The paid version 'Gemini 2.5 Pro Preview' works without problems for NSFW/Violence content."
-            }
-          }
-        ]
-      });
     }
     
     // Extrahiere Fehlermeldung
@@ -281,25 +243,21 @@ async function handleProxyRequestWithModel(req, res, forceModel = null) {
     } else if (error.message.includes('timeout')) {
       errorMessage = "Connection timeout: The API didn't respond in time";
     } else if (error.response?.status === 429) {
-      errorMessage = "Rate limit exceeded: Too many requests";
-    } else if (error.response?.data?.error?.message) {
-      errorMessage = error.response.data.error.message;
-    } else if (error.message) {
-      errorMessage = error.message;
-    }
-    
-    // Check if this is a content filter error (403, PROHIBITED_CONTENT, pgshag2)
-    if (error.response?.status === 403 ||
-        error.response?.data?.error?.code === 403 ||
-        error.response?.data?.error?.message?.includes('PROHIBITED_CONTENT') ||
-        error.response?.data?.error?.message?.includes('pgshag2') || 
-        error.response?.data?.error?.message?.includes('No response from bot') ||
-        JSON.stringify(error.response?.data?.error || {}).includes('pgshag2') ||
-        JSON.stringify(error.response?.data?.error || {}).includes('PROHIBITED_CONTENT') ||
-        errorMessage.includes('pgshag2') ||
-        errorMessage.includes('PROHIBITED_CONTENT')) {
-      console.log("Detected content filter error in catch block");
-      // Custom error message for content filtering
+      // Rate Limit Fehler
+      return res.status(200).json({
+        choices: [
+          {
+            message: {
+              content: "Sorry my love, Gemini is unfortunately a bit stingy and you're either too fast, (Wait a few seconds, because the free version only allows a few requests per minute.) or you've used up your free messages for the day in the free version. In that case, you either need to switch to the paid version or wait until tomorrow. I'm sorry! Sending you a big hug! <3"
+            }
+          }
+        ]
+      });
+    } else if (error.response?.status === 403 || 
+               error.message?.includes('PROHIBITED_CONTENT') ||
+               error.message?.includes('pgshag2') || 
+               error.message?.includes('No response from bot')) {
+      // Content-Filter Fehler
       return res.status(200).json({
         choices: [
           {
@@ -309,6 +267,10 @@ async function handleProxyRequestWithModel(req, res, forceModel = null) {
           }
         ]
       });
+    } else if (error.response?.data?.error?.message) {
+      errorMessage = error.response.data.error.message;
+    } else if (error.message) {
+      errorMessage = error.message;
     }
     
     // Konsistentes Fehlerformat für Janitor
