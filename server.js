@@ -174,10 +174,13 @@ async function handleProxyRequestWithModel(req, res, forceModel = null) {
         });
       }
       
-      // Prüfe auf pgshag2-Fehler in der Antwort (Gemini Content-Filter)
-      if (response.data.error.message?.includes('pgshag2') || 
+      // Prüfe auf Content-Filter Fehler (PROHIBITED_CONTENT, 403, pgshag2)
+      if (response.data.error.code === 403 || 
+          response.data.error.message?.includes('PROHIBITED_CONTENT') || 
+          response.data.error.message?.includes('pgshag2') || 
           response.data.error.message?.includes('No response from bot') || 
-          JSON.stringify(response.data.error).includes('pgshag2')) {
+          JSON.stringify(response.data.error).includes('pgshag2') ||
+          JSON.stringify(response.data.error).includes('PROHIBITED_CONTENT')) {
         
         // Gib eine formatierte Antwort zurück, die Janitor versteht
         return res.status(200).json({
@@ -228,12 +231,17 @@ async function handleProxyRequestWithModel(req, res, forceModel = null) {
       errorMessage = error.message;
     }
     
-    // Check if this is a pgshag2 error from the catch block
-    if (error.response?.data?.error?.message?.includes('pgshag2') || 
+    // Check if this is a content filter error (403, PROHIBITED_CONTENT, pgshag2)
+    if (error.response?.status === 403 ||
+        error.response?.data?.error?.code === 403 ||
+        error.response?.data?.error?.message?.includes('PROHIBITED_CONTENT') ||
+        error.response?.data?.error?.message?.includes('pgshag2') || 
         error.response?.data?.error?.message?.includes('No response from bot') ||
         JSON.stringify(error.response?.data?.error || {}).includes('pgshag2') ||
-        errorMessage.includes('pgshag2')) {
-      console.log("Detected pgshag2 error in catch block");
+        JSON.stringify(error.response?.data?.error || {}).includes('PROHIBITED_CONTENT') ||
+        errorMessage.includes('pgshag2') ||
+        errorMessage.includes('PROHIBITED_CONTENT')) {
+      console.log("Detected content filter error in catch block");
       // Custom error message for content filtering
       return res.status(200).json({
         choices: [
