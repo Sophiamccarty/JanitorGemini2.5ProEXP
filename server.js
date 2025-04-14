@@ -43,10 +43,38 @@ async function makeRequestWithRetry(url, data, headers, maxRetries = 2) {
       console.log(`API-Anfrage an OpenRouter (Versuch ${attempt + 1}/${maxRetries + 1})`);
       
       const response = await apiClient.post(url, data, { headers });
+      
+      // Direkt hier prüfen, ob die Antwort "No response from bot (pgshag2)" enthält
+      if (JSON.stringify(response.data).includes("No response from bot (pgshag2)")) {
+        console.log("Detected pgshag2 error directly in makeRequestWithRetry");
+        // Wenn ja, keine Error werfen, sondern ein spezielles Objekt zurückgeben
+        return {
+          status: 200,
+          data: {
+            pgshag2_error: true,
+            original_response: response.data
+          }
+        };
+      }
+      
       return response; // Erfolg! Beende Schleife und gib Response zurück
       
     } catch (error) {
       lastError = error;
+      
+      // Direkt hier prüfen, ob der Fehler "No response from bot (pgshag2)" enthält
+      if (error.message?.includes("No response from bot (pgshag2)") || 
+          JSON.stringify(error.response?.data || {}).includes("No response from bot (pgshag2)")) {
+        console.log("Detected pgshag2 error in makeRequestWithRetry catch block");
+        // Wenn ja, keine Error werfen, sondern ein spezielles Objekt zurückgeben
+        return {
+          status: 200,
+          data: {
+            pgshag2_error: true,
+            original_error: error.message
+          }
+        };
+      }
       
       // Prüfe, ob es ein Fehler ist, der ein Retry rechtfertigt
       const status = error.response?.status;
@@ -155,6 +183,36 @@ async function handleProxyRequestWithModel(req, res, forceModel = null) {
     // Antwort von Openrouter an den Client zurückgeben
     console.log(`== Openrouter-Antwort erhalten (${new Date().toISOString()}) ==`);
     
+    // Detailliertes Logging der Antwort für Debugging
+    console.log("OpenRouter response status:", response.status);
+    console.log("OpenRouter response headers:", JSON.stringify(response.headers));
+    console.log("OpenRouter response data:", JSON.stringify(response.data));
+
+    // Prüfen, ob es sich um unser spezielles pgshag2-Fehler-Objekt handelt
+    if (response.data?.pgshag2_error) {
+      console.log("Found custom pgshag2 error object, returning custom message");
+      return res.status(200).json({
+        choices: [{
+          message: {
+            content: "Unfortunately, Gemini is being difficult and finds your content too 'extreme'. The paid version 'Gemini 2.5 Pro Preview' works without problems for NSFW/Violence content."
+          }
+        }]
+      });
+    }
+
+    // Direkte Prüfung auf "No response from bot (pgshag2)" in der gesamten Antwort
+    const responseStr = JSON.stringify(response.data);
+    if (responseStr.includes("No response from bot (pgshag2)")) {
+      console.log("Detected pgshag2 error in exact string format");
+      return res.status(200).json({
+        choices: [{
+          message: {
+            content: "Unfortunately, Gemini is being difficult and finds your content too 'extreme'. The paid version 'Gemini 2.5 Pro Preview' works without problems for NSFW/Violence content."
+          }
+        }]
+      });
+    }
+    
     // Prüfe, ob es eine Fehlerantwort von Openrouter ist
     if (response.data.error) {
       console.log("Fehler erkannt in Openrouter-Antwort:", response.data.error);
@@ -206,11 +264,27 @@ async function handleProxyRequestWithModel(req, res, forceModel = null) {
     return res.json(response.data);
 
   } catch (error) {
-    // Log Details des Fehlers
+    // Catch-Block-Logging verbessern
     console.error("Error in Proxy:", error.message);
     if (error.response) {
       console.error("Status:", error.response.status);
       console.error("Response data:", JSON.stringify(error.response.data));
+    }
+    console.error("Full error object:", JSON.stringify(error, Object.getOwnPropertyNames(error)));
+    
+    // Direkte Prüfung auf den exakten String "No response from bot (pgshag2)"
+    const errorString = JSON.stringify(error) + JSON.stringify(error.response?.data || {}) + error.message;
+    if (errorString.includes("No response from bot (pgshag2)")) {
+      console.log("Detected pgshag2 error in catch block via direct string match");
+      return res.status(200).json({
+        choices: [
+          {
+            message: {
+              content: "Unfortunately, Gemini is being difficult and finds your content too 'extreme'. The paid version 'Gemini 2.5 Pro Preview' works without problems for NSFW/Violence content."
+            }
+          }
+        ]
+      });
     }
     
     // Extrahiere Fehlermeldung
