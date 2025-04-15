@@ -156,7 +156,7 @@ async function handleProxyRequestWithModel(req, res, forceModel = null) {
       'Content-Type': 'application/json',
       'Authorization': `Bearer ${apiKey}`,
       'User-Agent': 'JanitorAI-Proxy/1.0',
-      'HTTP-Referer': 'https://janitor.ai/',  // Hinzugefügt: Identifiziert die Quelle als Janitor.ai
+      'HTTP-Referer': 'https://janitorai.com',  // Hinzugefügt: Identifiziert die Quelle als Janitor.ai
       'X-Title': 'Janitor.ai'                 // Hinzugefügt: Weitere Identifikation für OpenRouter
     };
     
