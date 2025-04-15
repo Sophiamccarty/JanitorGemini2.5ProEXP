@@ -156,7 +156,15 @@ async function handleProxyRequestWithModel(req, res, forceModel = null) {
       'Content-Type': 'application/json',
       'Authorization': `Bearer ${apiKey}`,
       'User-Agent': 'JanitorAI-Proxy/1.0',
+      'HTTP-Referer': 'https://janitor.ai/',  // Hinzugefügt: Identifiziert die Quelle als Janitor.ai
+      'X-Title': 'Janitor.ai'                 // Hinzugefügt: Weitere Identifikation für OpenRouter
     };
+    
+    // Füge Referrer auch im Body hinzu für vollständige Attribution
+    if (!newBody.metadata) {
+      newBody.metadata = {};
+    }
+    newBody.metadata.referer = 'https://janitor.ai/';
     
     // Mit Retry-Logik anfragen - immer an den korrekten OpenRouter-Endpunkt
     const response = await makeRequestWithRetry(
@@ -324,7 +332,7 @@ app.post('/v1/chat/completions', async (req, res) => {
 app.get('/', (req, res) => {
   res.json({
     status: 'online',
-    version: '1.3.0',
+    version: '1.3.1',
     info: 'JanitorAI ↔️ OpenRouter Proxy mit verbesserten Verbindungseinstellungen',
     usage: 'Diesen Proxy mit JanitorAI verwenden - API-Key bei JanitorAI eingeben',
     endpoints: {
