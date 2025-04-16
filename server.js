@@ -480,6 +480,24 @@ async function handleProxyRequestWithModel(req, res, forceModel = null, useJailb
         });
       }
       
+      // Prüfe auf 404-Fehler für das experimentelle Modell
+      if (response.data.error.code === 404 || 
+          response.data.error.message?.includes('experimental google/gemini-2.5-pro-exp-03-25 model has been limited') ||
+          response.data.error.message?.includes('usage of the experimental google/gemini') ||
+          response.data.error.message?.includes('limited to OpenRouter users') ||
+          response.data.error.message?.includes('purchased at least 10 credits') ||
+          response.data.error.message?.includes('model not found') ||
+          response.data.error.message?.includes('gemini-2.5-pro-exp-03-25:free')) {
+        
+        return res.status(200).json({
+          choices: [{
+            message: {
+              content: "Oh my gosh, usage of the experimental Google FUCKING Gemini 2.5 Pro Free model is FUCKING limited to FUCKING OpenRouter users who have FUCKING purchased at least 10 credits. Please consider using the paid version at https://openrouter.ai/google/gemini-2.5-pro-preview-03-25 or adding your own API keys in https://openrouter.ai/settings/integrations. YEAH BECAUSE WE'RE FUCKING RICH BITCHES."
+            }
+          }]
+        });
+      }
+      
       // Andere Fehler
       return res.status(200).json({
         choices: [{
