@@ -7,8 +7,15 @@ const https = require('https');
 // Erzeuge eine Express-App
 const app = express();
 
-// 1) CORS erlauben (wichtig für Browser-Anfragen)
-app.use(cors());
+// 1) CORS mit erweiterten Optionen erlauben
+app.use(cors({
+  origin: '*', // Erlaubt alle Origins
+  methods: ['GET', 'POST', 'OPTIONS'], // Explizit erlaubte Methoden
+  allowedHeaders: ['Content-Type', 'Authorization', 'X-API-Key', 'X-Title'],
+  credentials: true,
+  preflightContinue: false,
+  optionsSuccessStatus: 204
+}));
 
 // 2) JSON mit erhöhtem Limit parsen, z. B. 100MB
 app.use(express.json({ limit: '100mb' }));
@@ -20,7 +27,38 @@ app.use((req, res, next) => {
   next();
 });
 
-// 4) Axios-Instance mit Connection Pooling und Timeout
+// 4) Verbesserte Request-Logging-Middleware
+app.use((req, res, next) => {
+  const timestamp = new Date().toISOString();
+  const method = req.method;
+  const url = req.url;
+  const ip = req.headers['x-forwarded-for'] || req.ip;
+  
+  console.log(`[${timestamp}] ${method} ${url} - IP: ${ip}`);
+  
+  // Bei OPTIONS-Anfragen sofort antworten
+  if (method === 'OPTIONS') {
+    return res.status(204).end();
+  }
+  
+  // Methoden-Überprüfung für alle API-Endpunkte
+  if ((url.startsWith('/free') || 
+       url.startsWith('/cash') || 
+       url.startsWith('/nofilter') || 
+       url.startsWith('/v1/chat/completions')) && 
+      method !== 'POST') {
+    console.log(`Methodenfehler: ${method} nicht erlaubt für ${url}`);
+    return res.status(405).json({
+      error: 'Method Not Allowed',
+      message: `${url} erfordert die POST-Methode, erhielt aber ${method}`,
+      status: 405
+    });
+  }
+  
+  next();
+});
+
+// 5) Axios-Instance mit Connection Pooling und Timeout
 const apiClient = axios.create({
   // Connection Pooling aktivieren (verhindert zu viele TCP-Verbindungen)
   httpAgent: new http.Agent({ keepAlive: true, maxSockets: 100 }),
@@ -445,12 +483,34 @@ app.post('/v1/chat/completions', async (req, res) => {
   await handleProxyRequest(req, res);
 });
 
+// Explizit alle Methoden für die API-Endpunkte erlauben und korrekte Fehler zurückgeben
+// Dies ist wichtig für CORS-Preflight und methodenübergreifende Anfragen
+const apiEndpoints = ['/free', '/cash', '/nofilter', '/v1/chat/completions'];
+
+apiEndpoints.forEach(endpoint => {
+  // OPTIONS für CORS pre-flight
+  app.options(endpoint, (req, res) => {
+    res.status(204).end();
+  });
+  
+  // Alle anderen Methoden außer POST mit 405 Method Not Allowed beantworten
+  ['get', 'put', 'delete', 'patch', 'head'].forEach(method => {
+    app[method](endpoint, (req, res) => {
+      res.status(405).json({
+        error: 'Method Not Allowed',
+        message: `${endpoint} erfordert die POST-Methode, erhielt aber ${method.toUpperCase()}`,
+        status: 405
+      });
+    });
+  });
+});
+
 // Einfache Statusroute aktualisieren mit neuen Endpunkten
 app.get('/', (req, res) => {
   res.json({
     status: 'online',
-    version: '1.4.0',
-    info: 'JanitorAI ↔️ OpenRouter Proxy mit dynamischen Safety-Settings und Streaming-Support',
+    version: '1.4.1',
+    info: 'JanitorAI ↔️ OpenRouter Proxy mit dynamischen Safety-Settings, Streaming-Support und verbessertem CORS/Error-Handling',
     usage: 'Diesen Proxy mit JanitorAI verwenden - API-Key bei JanitorAI eingeben',
     endpoints: {
       standard: '/nofilter',          // Standard-Route ohne Modellzwang
@@ -460,7 +520,9 @@ app.get('/', (req, res) => {
     },
     features: {
       streaming: 'Aktiviert',
-      dynamicSafety: 'Optimiert für google/gemini-2.5-pro-preview-03-25 und google/gemini-2.5-pro-exp-03-25:free (beide mit OFF-Setting)'
+      dynamicSafety: 'Optimiert für google/gemini-2.5-pro-preview-03-25 und google/gemini-2.5-pro-exp-03-25:free (beide mit OFF-Setting)',
+      cors: 'Vollständig unterstützt mit OPTIONS-Preflight',
+      errorHandling: 'Verbessert mit 405-Erkennung'
     }
   });
 });
@@ -472,6 +534,26 @@ app.get('/health', (req, res) => {
     uptime: process.uptime(),
     memory: process.memoryUsage(),
     timestamp: new Date().toISOString()
+  });
+});
+
+// Globaler Error-Handler für unbehandelte Fehler
+app.use((err, req, res, next) => {
+  console.error('Unbehandelter Fehler:', err);
+  res.status(500).json({
+    error: 'Internal Server Error',
+    message: process.env.NODE_ENV === 'production' ? 
+      'Ein interner Serverfehler ist aufgetreten' : err.message
+  });
+});
+
+// Catch-All Route für Anfragen an nicht existierende Pfade
+app.use((req, res) => {
+  console.log(`404 Nicht gefunden: ${req.method} ${req.url}`);
+  res.status(404).json({
+    error: 'Not Found',
+    message: `Der Endpunkt ${req.url} existiert nicht auf diesem Server`,
+    availableEndpoints: ['/free', '/cash', '/nofilter', '/v1/chat/completions', '/', '/health']
   });
 });
 
