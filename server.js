@@ -152,8 +152,9 @@ async function makeRequestWithRetry(url, data, headers, maxRetries = 2, isStream
       const shouldRetry = (status === 429 || (status >= 500 && status < 600));
       
       if (shouldRetry && attempt < maxRetries) {
-        // Exponential Backoff: 1s, 2s, 4s, ...
-        const delay = 1000 * Math.pow(2, attempt);
+        // Verbessertes Exponential Backoff für Rate Limits: 5s, 10s, 20s, ...
+        const baseDelay = status === 429 ? 5000 : 1000; // 5 Sekunden Basis-Delay für Rate Limits
+        const delay = baseDelay * Math.pow(2, attempt);
         console.log(`Wiederhole in ${delay}ms (Status ${status})`);
         await new Promise(resolve => setTimeout(resolve, delay));
         continue;
@@ -223,10 +224,15 @@ async function handleProxyRequestWithModel(req, res, forceModel = null) {
       apiKey = req.query.api_key;
     }
 
-    // Kein API-Key gefunden
-    if (!apiKey) {
+    // Verbesserte API-Key-Validierung
+    if (!apiKey || apiKey.length < 32) { // Die meisten API-Keys sind mindestens 32 Zeichen lang
+      console.log("Potenziell ungültiger API-Key-Format", apiKey ? (apiKey.substring(0, 5) + "...") : "leer");
       return res.status(401).json({
-        error: 'Openrouter API-Key fehlt. Bitte gib deinen API-Key bei JanitorAI ein.'
+        choices: [{
+          message: {
+            content: "Dein OpenRouter API-Key scheint ungültig zu sein. Bitte überprüfe ihn. Ein gültiger OpenRouter API-Key beginnt mit 'sk-or-' und ist deutlich länger."
+          }
+        }]
       });
     }
 
@@ -285,7 +291,14 @@ async function handleProxyRequestWithModel(req, res, forceModel = null) {
       isStreamingRequested     // Stream-Modus
     );
 
+    // Erweiterte Logging für bessere Diagnose
     console.log(`== Openrouter-Antwort erhalten (${new Date().toISOString()}) ==`);
+    console.log(`Status: ${response.status}, Headers: ${JSON.stringify(response.headers || {})}`);
+    if (response.data && !isStreamingRequested) {
+      // Nur die ersten 200 Zeichen loggen, um das Log nicht zu überfüllen
+      const responsePreview = JSON.stringify(response.data).substring(0, 200);
+      console.log(`Antwort-Daten (Ausschnitt): ${responsePreview}...`);
+    }
 
     // Stream-Anfrage behandeln
     if (isStreamingRequested && response.data) {
@@ -307,7 +320,7 @@ async function handleProxyRequestWithModel(req, res, forceModel = null) {
     
     // Prüfe, ob es eine Fehlerantwort von Openrouter ist
     if (response.data.error) {
-      console.log("Fehler erkannt in Openrouter-Antwort");
+      console.log("Fehler erkannt in Openrouter-Antwort:", JSON.stringify(response.data.error).substring(0, 200));
       
       // Prüfe auf den Quota-Fehler in der Antwort
       if (response.data.error.code === 429 || 
@@ -351,23 +364,31 @@ async function handleProxyRequestWithModel(req, res, forceModel = null) {
     return res.json(response.data);
 
   } catch (error) {
-    // Log Details des Fehlers (knapp)
+    // Verbesserte Fehlerbehandlung mit spezifischeren Logs
     console.error("Error in Proxy:", error.message);
     if (error.response) {
       console.error("Status:", error.response.status);
+      // Log mehr Details zur Fehlerantwort
+      if (error.response.data) {
+        console.error("Response data:", JSON.stringify(error.response.data).substring(0, 300));
+      }
     }
     
     // Extrahiere Fehlermeldung
     let errorMessage = "Unknown error";
     
-    // Prüfe auf verschiedene Fehlertypen
+    // Verbesserte Prüfung auf verschiedene Fehlertypen
     if (error.code === 'ECONNABORTED') {
+      console.error("Timeout-Fehler beim Verbinden mit OpenRouter");
       errorMessage = "Request timeout: The API took too long to respond";
     } else if (error.code === 'ECONNRESET') {
+      console.error("Connection Reset-Fehler beim Verbinden mit OpenRouter");
       errorMessage = "Connection reset: The connection was interrupted";
     } else if (error.message.includes('timeout')) {
+      console.error("Timeout-Fehler beim Verbinden mit OpenRouter");
       errorMessage = "Connection timeout: The API didn't respond in time";
     } else if (error.response?.status === 429) {
+      console.error("Rate Limit erreicht (429)");
       // Rate Limit Fehler
       return res.status(200).json({
         choices: [
@@ -382,6 +403,7 @@ async function handleProxyRequestWithModel(req, res, forceModel = null) {
                error.message?.includes('PROHIBITED_CONTENT') ||
                error.message?.includes('pgshag2') || 
                error.message?.includes('No response from bot')) {
+      console.error("Content-Filter ausgelöst (403 oder spezieller Fehlercode)");
       // Content-Filter Fehler
       return res.status(200).json({
         choices: [
@@ -397,6 +419,9 @@ async function handleProxyRequestWithModel(req, res, forceModel = null) {
     } else if (error.message) {
       errorMessage = error.message;
     }
+    
+    // Log der finalen Fehlermeldung
+    console.error("Finale Fehlermeldung an Client:", errorMessage);
     
     // Konsistentes Fehlerformat für Janitor
     return res.status(200).json({
@@ -449,7 +474,7 @@ app.post('/v1/chat/completions', async (req, res) => {
 app.get('/', (req, res) => {
   res.json({
     status: 'online',
-    version: '1.4.0',
+    version: '1.5.0',
     info: 'JanitorAI ↔️ OpenRouter Proxy mit dynamischen Safety-Settings und Streaming-Support',
     usage: 'Diesen Proxy mit JanitorAI verwenden - API-Key bei JanitorAI eingeben',
     endpoints: {
@@ -460,7 +485,8 @@ app.get('/', (req, res) => {
     },
     features: {
       streaming: 'Aktiviert',
-      dynamicSafety: 'Optimiert für google/gemini-2.5-pro-preview-03-25 und google/gemini-2.5-pro-exp-03-25:free (beide mit OFF-Setting)'
+      dynamicSafety: 'Optimiert für google/gemini-2.5-pro-preview-03-25 und google/gemini-2.5-pro-exp-03-25:free (beide mit OFF-Setting)',
+      diagnostics: 'Erweiterte Fehlerdiagnose aktiv'
     }
   });
 });
