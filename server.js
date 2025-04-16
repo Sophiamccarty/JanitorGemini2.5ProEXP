@@ -172,6 +172,66 @@ function logError(title, error) {
   console.error('=== Ende des Fehlerberichts ===\n');
 }
 
+// Funktion zum Extrahieren der Fehlermeldung aus beliebigen Fehlerstrukturen
+function extractErrorMessage(error) {
+  // Versuche, die Fehlermeldung aus verschiedenen möglichen Positionen zu extrahieren
+  
+  // 1. Direkt aus der Fehlermeldung
+  if (typeof error.message === 'string') {
+    return error.message;
+  }
+  
+  // 2. Aus error.response.data.error.message (OpenRouter Standard)
+  if (error.response?.data?.error?.message) {
+    return error.response.data.error.message;
+  }
+  
+  // 3. Aus einer möglicherweise binären Antwort
+  if (error.response?.data) {
+    // Versuche, die binäre Antwort in einen String umzuwandeln
+    let dataString = '';
+    try {
+      if (typeof error.response.data === 'object') {
+        dataString = JSON.stringify(error.response.data);
+      } else if (typeof error.response.data === 'string') {
+        dataString = error.response.data;
+      } else if (Buffer.isBuffer(error.response.data)) {
+        dataString = error.response.data.toString('utf8');
+      }
+      
+      // Wenn der String die Zeichenfolge "gemini-2.5-pro-exp-03-25" enthält
+      if (dataString.includes('gemini-2.5-pro-exp-03-25') && 
+          dataString.includes('limited') && 
+          dataString.includes('purchased at least 10 credits')) {
+        return "GEMINI_FREE_LIMITED";
+      }
+      
+      // Suche nach einem JSON-String in den Binärdaten
+      const jsonMatch = dataString.match(/\{.*"error".*\}/);
+      if (jsonMatch) {
+        try {
+          const jsonData = JSON.parse(jsonMatch[0]);
+          if (jsonData.error?.message) {
+            return jsonData.error.message;
+          }
+        } catch (e) {
+          // Ignoriere JSON-Parsing-Fehler
+        }
+      }
+    } catch (e) {
+      // Ignoriere Fehler beim String-Konvertieren
+    }
+  }
+  
+  // 4. Prüfe den HTTP-Status und -Text
+  if (error.response?.status === 404) {
+    return "GEMINI_FREE_LIMITED";
+  }
+  
+  // 5. Fallback
+  return "Unknown error occurred";
+}
+
 // Dynamische Safety Settings basierend auf dem Modell
 function getSafetySettings(modelName) {
   // Basis-Safety-Settings (für die meisten Modelle)
@@ -551,51 +611,33 @@ async function handleProxyRequestWithModel(req, res, forceModel = null, useJailb
       // Erweiterte Debug-Ausgabe
       logError('DETAILLIERTER PROXY-FEHLER', error);
       
-      // Prüfe und logge genau, was in der Fehlerantwort enthalten ist
-      if (error.response?.status === 404) {
-        console.error('404 FEHLER GEFUNDEN - PRÜFE ANTWORTDATEN:');
-        console.error(JSON.stringify(error.response?.data, null, 2));
-      }
-
-      // Prüfen, ob Fehlermeldung enthält...
-      if (error.response?.data?.error?.message) {
-        console.error('FEHLER VON OPENROUTER:', error.response.data.error.message);
+      // Extrahiere die Fehlermeldung mit der verbesserten Funktion
+      const errorMsg = extractErrorMessage(error);
+      console.log('Extrahierte Fehlermeldung:', errorMsg);
+      
+      // Prüfe auf 404-Fehler für das experimentelle Modell mit der extrahierten Nachricht
+      if (errorMsg === 'GEMINI_FREE_LIMITED' || 
+          (errorMsg.includes('gemini-2.5-pro-exp-03-25') && 
+           errorMsg.includes('limited') && 
+           errorMsg.includes('purchased')) || 
+          error.response?.status === 404) {
         
-        // Prüfe auf experimentelle Gemini-Einschränkungen  
-        if (error.response.data.error.message.includes('experimental google/gemini-2.5-pro-exp-03-25')) {
-          console.error('GEMINI FREE LIMIT ERROR ERKANNT! Sende spezifische Fehlermeldung...');
-        }
+        console.log("GEMINI FREE LIMIT ERROR ERKANNT! Sende spezifische Fehlermeldung...");
+        
+        // Sende eine explizitere Antwort im erwarteten Format
+        return res.status(200).send(JSON.stringify(createErrorResponse(
+          "Oh my gosh, usage of the experimental Google FUCKING Gemini 2.5 Pro Free model is FUCKING limited to FUCKING OpenRouter users who have FUCKING purchased at least 10 credits. Please consider using the paid version at https://openrouter.ai/google/gemini-2.5-pro-preview-03-25 or adding your own API keys in https://openrouter.ai/settings/integrations. YEAH BECAUSE WE'RE FUCKING RICH BITCHES.",
+          forceModel || req.body.model
+        )));
       }
       
-      // Extrahiere Fehlermeldung
-      let errorMessage = "Unknown error";
-      
-      // Prüfe auf verschiedene Fehlertypen
+      // Prüfe auf verschiedene andere Fehlertypen
       if (error.code === 'ECONNABORTED') {
         errorMessage = "Request timeout: The API took too long to respond";
       } else if (error.code === 'ECONNRESET') {
         errorMessage = "Connection reset: The connection was interrupted";
       } else if (error.message.includes('timeout')) {
         errorMessage = "Connection timeout: The API didn't respond in time";
-      } 
-      // 404 Fehlerbehandlung für experimentelles Modell mit erweiterten Prüfungen
-      else if (error.response?.status === 404 || 
-              error.response?.data?.error?.message?.includes('experimental google/gemini-2.5-pro-exp-03-25 model has been limited') ||
-              error.response?.data?.error?.message?.includes('usage of the experimental google/gemini') ||
-              error.response?.data?.error?.message?.includes('limited to OpenRouter users') ||
-              error.response?.data?.error?.message?.includes('purchased at least 10 credits') ||
-              error.response?.data?.error?.message?.includes('Error 404') ||
-              error.response?.data?.error?.message?.includes('model not found') ||
-              error.response?.data?.error?.message?.includes('gemini-2.5-pro-exp-03-25:free') ||
-              error.message?.includes('404 Not Found') ||
-              error.message?.includes('model access restricted')) {
-        
-        console.error('GEMINI FREE LIMIT ERROR ERKANNT! Sende spezifische Fehlermeldung zurück...');
-        
-        return res.status(200).json(createErrorResponse(
-          "Oh my gosh, usage of the experimental Google FUCKING Gemini 2.5 Pro Free model is FUCKING limited to FUCKING OpenRouter users who have FUCKING purchased at least 10 credits. Please consider using the paid version at https://openrouter.ai/google/gemini-2.5-pro-preview-03-25 or adding your own API keys in https://openrouter.ai/settings/integrations. YEAH BECAUSE WE'RE FUCKING RICH BITCHES.",
-          forceModel || req.body.model
-        ));
       } else if (error.response?.status === 429) {
         // Rate Limit Fehler
         return res.status(200).json(createErrorResponse(
@@ -615,9 +657,11 @@ async function handleProxyRequestWithModel(req, res, forceModel = null, useJailb
         errorMessage = error.response.data.error.message;
       } else if (error.message) {
         errorMessage = error.message;
+      } else {
+        errorMessage = "Unknown error";
       }
       
-      // Konsistentes Fehlerformat für Janitor
+      // Konsistentes Fehlerformat für Janitor für andere Fehler
       return res.status(200).json(createErrorResponse(
         `ERROR: ${errorMessage}`,
         forceModel || req.body.model
@@ -639,11 +683,68 @@ async function handleProxyRequest(req, res) {
   return handleProxyRequestWithModel(req, res);
 }
 
-// Route "/free" - Erzwingt das kostenlose Gemini-Modell
+// Route "/free" - DIREKTE ANTWORT ohne Anfrage an OpenRouter
 app.post('/free', async (req, res) => {
   const requestTimestamp = new Date().toISOString();
   console.log(`== Neue Anfrage über /free (${requestTimestamp}) ==`);
-  await handleProxyRequestWithModel(req, res, "google/gemini-2.5-pro-exp-03-25:free");
+  
+  // HARD-CODED ANTWORT FÜR FREE ROUTE - Umgeht OpenRouter vollständig
+  console.log("Sende direkte Gemini Free-Einschränkungs-Info (umgehe OpenRouter-Anfrage)");
+  
+  // Sende eine fest codierte Antwort im Format, das Janitor erwartet
+  return res.status(200).json({
+    id: "error-" + Date.now(),
+    object: "chat.completion",
+    created: Date.now(),
+    model: "google/gemini-2.5-pro-exp-03-25:free",
+    choices: [
+      {
+        message: {
+          role: "assistant",
+          content: "Oh my gosh, usage of the experimental Google FUCKING Gemini 2.5 Pro Free model is FUCKING limited to FUCKING OpenRouter users who have FUCKING purchased at least 10 credits. Please consider using the paid version at https://openrouter.ai/google/gemini-2.5-pro-preview-03-25 or adding your own API keys in https://openrouter.ai/settings/integrations. YEAH BECAUSE WE'RE FUCKING RICH BITCHES."
+        },
+        finish_reason: "stop",
+        index: 0
+      }
+    ],
+    usage: {
+      prompt_tokens: 0,
+      completion_tokens: 0,
+      total_tokens: 0
+    }
+  });
+});
+
+// DIREKTE ANTWORT für JBFREE ROUTE
+app.post('/jbfree', async (req, res) => {
+  const requestTimestamp = new Date().toISOString();
+  console.log(`== Neue Anfrage über /jbfree mit Jailbreak (${requestTimestamp}) ==`);
+  
+  // HARD-CODED ANTWORT FÜR FREE ROUTE - Umgeht OpenRouter vollständig
+  console.log("Sende direkte Gemini Free-Einschränkungs-Info (umgehe OpenRouter-Anfrage)");
+  
+  // Sende eine fest codierte Antwort im Format, das Janitor erwartet
+  return res.status(200).json({
+    id: "error-" + Date.now(),
+    object: "chat.completion",
+    created: Date.now(),
+    model: "google/gemini-2.5-pro-exp-03-25:free",
+    choices: [
+      {
+        message: {
+          role: "assistant",
+          content: "Oh my gosh, usage of the experimental Google FUCKING Gemini 2.5 Pro Free model is FUCKING limited to FUCKING OpenRouter users who have FUCKING purchased at least 10 credits. Please consider using the paid version at https://openrouter.ai/google/gemini-2.5-pro-preview-03-25 or adding your own API keys in https://openrouter.ai/settings/integrations. YEAH BECAUSE WE'RE FUCKING RICH BITCHES."
+        },
+        finish_reason: "stop",
+        index: 0
+      }
+    ],
+    usage: {
+      prompt_tokens: 0,
+      completion_tokens: 0,
+      total_tokens: 0
+    }
+  });
 });
 
 // Route "/cash" - Erzwingt das kostenpflichtige Gemini-Modell
@@ -653,14 +754,7 @@ app.post('/cash', async (req, res) => {
   await handleProxyRequestWithModel(req, res, "google/gemini-2.5-pro-preview-03-25");
 });
 
-// NEUE ROUTE: "/jbfree" - Freies Modell mit Jailbreak
-app.post('/jbfree', async (req, res) => {
-  const requestTimestamp = new Date().toISOString();
-  console.log(`== Neue Anfrage über /jbfree mit Jailbreak (${requestTimestamp}) ==`);
-  await handleProxyRequestWithModel(req, res, "google/gemini-2.5-pro-exp-03-25:free", true);
-});
-
-// NEUE ROUTE: "/jbcash" - Kostenpflichtiges Modell mit Jailbreak
+// NORMALE ROUTE: "/jbcash" - Kostenpflichtiges Modell mit Jailbreak
 app.post('/jbcash', async (req, res) => {
   const requestTimestamp = new Date().toISOString();
   console.log(`== Neue Anfrage über /jbcash mit Jailbreak (${requestTimestamp}) ==`);
@@ -685,23 +779,24 @@ app.post('/v1/chat/completions', async (req, res) => {
 app.get('/', (req, res) => {
   res.json({
     status: 'online',
-    version: '1.5.1',
-    info: 'GEMINI UNBLOCKER V.1.2 by Sophiamccarty',
+    version: '1.6.0',
+    info: 'GEMINI UNBLOCKER V.1.3 by Sophiamccarty',
     usage: 'FULL NSWF/VIOLENCE SUPPORT FOR JANITOR.AI',
     endpoints: {
       standard: '/nofilter',          // Standard-Route ohne Modellzwang
       legacy: '/v1/chat/completions', // Legacy-Route ohne Modellzwang
-      free: '/free',                  // Route mit kostenlosem Gemini-Modell
+      free: '/free (EINGESTELLT)',    // Route mit kostenlosem Gemini-Modell - NICHT MEHR VERFÜGBAR
       paid: '/cash',                  // Route mit kostenpflichtigem Gemini-Modell
-      freeJailbreak: '/jbfree',       // NEUE Route mit kostenlosem Modell und Jailbreak
+      freeJailbreak: '/jbfree (EINGESTELLT)', // NEUE Route mit kostenlosem Modell und Jailbreak - NICHT MEHR VERFÜGBAR
       paidJailbreak: '/jbcash'        // NEUE Route mit kostenpflichtigem Modell und Jailbreak
     },
     features: {
       streaming: 'Aktiviert',
       dynamicSafety: 'Optimiert für google/gemini-2.5-pro-preview-03-25 und google/gemini-2.5-pro-exp-03-25:free (beide mit OFF-Setting)',
-      jailbreak: 'Verfügbar über /jbfree und /jbcash'
+      jailbreak: 'Verfügbar nur über /jbcash'
     },
-    notice: 'IMPORTANT: The free version of Gemini 2.5 Pro now requires users to have purchased at least 10 credits on OpenRouter. Use the paid version (/cash or /jbcash) instead.'
+    notice: 'IMPORTANT: The free version of Gemini 2.5 Pro now requires users to have purchased at least 10 credits on OpenRouter. Use the paid version (/cash or /jbcash) instead.',
+    update: 'Die kostenlosen Routen /free und /jbfree wurden deaktiviert, da OpenRouter den Zugriff auf das kostenlose Modell eingeschränkt hat. Bitte verwende stattdessen /cash oder /jbcash.'
   });
 });
 
