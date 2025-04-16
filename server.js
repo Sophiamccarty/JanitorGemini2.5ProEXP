@@ -503,7 +503,24 @@ async function handleProxyRequestWithModel(req, res, forceModel = null, useJailb
     // Extrahiere Fehlermeldung
     let errorMessage = "Unknown error";
     
-    // Prüfe auf verschiedene Fehlertypen
+    // IMPORTANT: Specific handling for the free model 404 error that appears as pgshag2 in Janitor
+    if ((error.response?.status === 404 && forceModel === "google/gemini-2.5-pro-exp-03-25:free") ||
+         error.message?.includes('pgshag2')) {
+      console.log("Detected free model 404 error / pgshag2 error - Credit requirement issue");
+      
+      // Set a very specific error format that will be displayed directly in Janitor
+      return res.status(200).json({
+        choices: [
+          {
+            message: {
+              content: "IMPORTANT: FUCKING OpenRouter now requires users to purchase at least 10 credits to use the free experimental model. Please type /cash to use the paid version instead, or purchase credits on OpenRouter.ai. YES I ALSO CRY!"
+            }
+          }
+        ]
+      });
+    }
+    
+    // Regular error handling continues
     if (error.code === 'ECONNABORTED') {
       errorMessage = "Request timeout: The API took too long to respond";
     } else if (error.code === 'ECONNRESET') {
@@ -534,37 +551,8 @@ async function handleProxyRequestWithModel(req, res, forceModel = null, useJailb
           }
         ]
       });
-    } else if (error.message?.includes('pgshag2')) {
-      // pgshag2 error - This is likely the 404 error from OpenRouter for the experimental model
-      console.log("Detected pgshag2 error - likely the free model credit requirement");
-      return res.status(200).json({
-        choices: [
-          {
-            message: {
-              content: "ERROR: OpenRouter has limited access to the free experimental Gemini model. To use it, you need to have purchased at least 10 credits from OpenRouter. Please consider using the paid version by typing /cash instead of /free, or add your own API keys in OpenRouter settings."
-            }
-          }
-        ]
-      });
     } else if (error.response?.status === 404) {
-      // Neuer Fehler: 404 für das experimentelle Modell ohne Credits
-      // Prüfe ob die Fehlermeldung den String "purchased at least 10 credits" enthält
-      const errorResponseData = error.response?.data;
-      if (errorResponseData && 
-          (errorResponseData.error?.message?.includes('purchased at least 10 credits') ||
-           JSON.stringify(errorResponseData).includes('purchased at least 10 credits'))) {
-        console.log("Model auf OP hat nach wie vor: google/gemini-2.5-pro-exp-03-25:free");
-        return res.status(200).json({
-          choices: [
-            {
-              message: {
-                content: "ERROR: FUCKING OpenRouter has limited access to the free experimental Gemini model. To use it, you need to have purchased at least 10 credits from OpenRouter. Please consider using the paid version by typing /cash instead of /free, or add your own API keys in OpenRouter settings."
-              }
-            }
-          ]
-        });
-      }
-      // Allgemeiner 404-Fehler
+      // General 404 error handling
       errorMessage = "Model not found or not accessible. Please try a different model.";
     } else if (error.response?.data?.error?.message) {
       errorMessage = error.response.data.error.message;
