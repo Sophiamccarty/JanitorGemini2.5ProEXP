@@ -490,39 +490,67 @@ async function handleProxyRequest(req, res) {
   return handleProxyRequestWithModel(req, res);
 }
 
-// Route "/free" - Erzwingt das kostenlose Gemini-Modell
-app.post('/free', async (req, res) => {
+// Methoden-Logger Middleware - VOR den Routen definieren
+app.use((req, res, next) => {
+  const requestMethod = req.method;
+  const requestPath = req.path;
+  console.log(`Eingehende Anfrage: ${requestMethod} ${requestPath}`);
+  next(); // Keine Methodenprüfung hier, nur Logging
+});
+
+// Gemeinsame Handler-Funktion für Anfragen unabhängig von der HTTP-Methode
+function handleRequest(req, res, modelOverride = null) {
   const requestTimestamp = new Date().toISOString();
-  console.log(`== Neue Anfrage über /free (${requestTimestamp}) ==`);
-  await handleProxyRequestWithModel(req, res, "google/gemini-2.5-pro-exp-03-25:free");
+  const endpoint = modelOverride ? 
+    (modelOverride.includes("free") ? "free" : "cash") : 
+    (req.path.includes("v1") ? "legacy" : "nofilter");
+  
+  console.log(`== Neue Anfrage über /${endpoint} (${requestTimestamp}) mit Methode ${req.method} ==`);
+  
+  // Je nach HTTP-Methode unterschiedlich verarbeiten
+  if (req.method === 'OPTIONS') {
+    // CORS preflight request beantworten
+    return res.status(200).end();
+  } else if (['GET', 'HEAD'].includes(req.method)) {
+    // GET und HEAD nicht für API-Endpunkte erlauben
+    return res.status(405).json({
+      choices: [{
+        message: {
+          content: `ERROR: Method ${req.method} is not allowed for this endpoint. Please use POST.`
+        }
+      }]
+    });
+  } else {
+    // POST, PUT, PATCH usw. alle gleich behandeln
+    return handleProxyRequestWithModel(req, res, modelOverride);
+  }
+}
+
+// Route "/free" - Erzwingt das kostenlose Gemini-Modell
+app.all('/free', (req, res) => {
+  handleRequest(req, res, "google/gemini-2.5-pro-exp-03-25:free");
 });
 
 // Route "/cash" - Erzwingt das kostenpflichtige Gemini-Modell
-app.post('/cash', async (req, res) => {
-  const requestTimestamp = new Date().toISOString();
-  console.log(`== Neue Anfrage über /cash (${requestTimestamp}) ==`);
-  await handleProxyRequestWithModel(req, res, "google/gemini-2.5-pro-preview-03-25");
+app.all('/cash', (req, res) => {
+  handleRequest(req, res, "google/gemini-2.5-pro-preview-03-25");
 });
 
 // Bestehende Proxy-Route "/nofilter" - Modell frei wählbar
-app.post('/nofilter', async (req, res) => {
-  const requestTimestamp = new Date().toISOString();
-  console.log(`== Neue Anfrage über /nofilter (${requestTimestamp}) ==`);
-  await handleProxyRequest(req, res);
+app.all('/nofilter', (req, res) => {
+  handleRequest(req, res);
 });
 
 // Für Abwärtskompatibilität alte Route beibehalten - Modell frei wählbar
-app.post('/v1/chat/completions', async (req, res) => {
-  const requestTimestamp = new Date().toISOString();
-  console.log(`== Neue Anfrage über alte Route /v1/chat/completions (${requestTimestamp}) ==`);
-  await handleProxyRequest(req, res);
+app.all('/v1/chat/completions', (req, res) => {
+  handleRequest(req, res);
 });
 
 // Einfache Statusroute aktualisieren mit neuen Endpunkten
 app.get('/', (req, res) => {
   res.json({
     status: 'online',
-    version: '1.5.0',
+    version: '1.5.1',
     info: 'JanitorAI ↔️ OpenRouter Proxy mit dynamischen Safety-Settings und Streaming-Support',
     usage: 'Diesen Proxy mit JanitorAI verwenden - API-Key bei JanitorAI eingeben',
     endpoints: {
@@ -534,7 +562,8 @@ app.get('/', (req, res) => {
     features: {
       streaming: 'Aktiviert',
       dynamicSafety: 'Optimiert für google/gemini-2.5-pro-preview-03-25 und google/gemini-2.5-pro-exp-03-25:free (beide mit OFF-Setting)',
-      diagnostics: 'Erweiterte Fehlerdiagnose aktiv'
+      diagnostics: 'Erweiterte Fehlerdiagnose aktiv',
+      methodSupport: 'Unterstützt POST, PUT, PATCH für alle Endpunkte'
     }
   });
 });
@@ -547,51 +576,6 @@ app.get('/health', (req, res) => {
     memory: process.memoryUsage(),
     timestamp: new Date().toISOString()
   });
-});
-
-// Methoden-Logging Middleware hinzufügen
-app.use((req, res, next) => {
-  const requestMethod = req.method;
-  const requestPath = req.path;
-  console.log(`Eingehende Anfrage: ${requestMethod} ${requestPath}`);
-  
-  // Explizite Behandlung von nicht unterstützten Methoden
-  if (!['GET', 'POST', 'OPTIONS'].includes(requestMethod) && 
-      (requestPath.includes('/free') || requestPath.includes('/cash') || 
-       requestPath.includes('/nofilter') || requestPath.includes('/v1/chat/completions'))) {
-    console.error(`405 Error: Methode ${requestMethod} nicht erlaubt für Pfad ${requestPath}`);
-    return res.status(405).json({
-      choices: [{
-        message: {
-          content: `ERROR: Method ${requestMethod} not allowed for this endpoint. Please use POST.`
-        }
-      }]
-    });
-  }
-  
-  next();
-});
-
-// Füge spezielle Handler für Pfade hinzu, um PUT/PATCH zu akzeptieren, falls Janitor diese verwendet
-// Dies ist ein Fallback für den Fall, dass Janitor unerwartete Methoden sendet
-app.put('/free', (req, res) => {
-  console.log('PUT-Anfrage für /free umgeleitet zu POST');
-  handleProxyRequestWithModel(req, res, "google/gemini-2.5-pro-exp-03-25:free");
-});
-
-app.put('/cash', (req, res) => {
-  console.log('PUT-Anfrage für /cash umgeleitet zu POST');
-  handleProxyRequestWithModel(req, res, "google/gemini-2.5-pro-preview-03-25");
-});
-
-app.put('/nofilter', (req, res) => {
-  console.log('PUT-Anfrage für /nofilter umgeleitet zu POST');
-  handleProxyRequest(req, res);
-});
-
-app.put('/v1/chat/completions', (req, res) => {
-  console.log('PUT-Anfrage für /v1/chat/completions umgeleitet zu POST');
-  handleProxyRequest(req, res);
 });
 
 // Starte den Express-Server
