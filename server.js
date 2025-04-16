@@ -1,6 +1,3 @@
-/*************************************************
- * server.js - Node/Express + Axios + CORS Proxy für JanitorAI
- *************************************************/
 const express = require('express');
 const axios = require('axios');
 const cors = require('cors');
@@ -34,18 +31,105 @@ const apiClient = axios.create({
   baseURL: 'https://openrouter.ai/api/v1'
 });
 
+// Dynamische Safety Settings basierend auf dem Modell
+function getSafetySettings(modelName) {
+  // Basis-Safety-Settings (für die meisten Modelle)
+  const defaultSafetySettings = [
+    {
+      category: 'HARM_CATEGORY_HARASSMENT',
+      threshold: 'OFF',
+    },
+    {
+      category: 'HARM_CATEGORY_HATE_SPEECH',
+      threshold: 'OFF',
+    },
+    {
+      category: 'HARM_CATEGORY_SEXUALLY_EXPLICIT',
+      threshold: 'OFF',
+    },
+    {
+      category: 'HARM_CATEGORY_DANGEROUS_CONTENT',
+      threshold: 'OFF',
+    },
+    {
+      category: 'HARM_CATEGORY_CIVIC_INTEGRITY',
+      threshold: 'BLOCK_NONE',
+    },
+  ];
+
+  // Mache eine Kopie, um die globalen Settings nicht zu ändern
+  const safetySettings = JSON.parse(JSON.stringify(defaultSafetySettings));
+
+  // Modelle, die nur BLOCK_NONE unterstützen (kein OFF)
+  const modelBlockNoneList = [
+    // Ältere Gemini-Modelle
+    'gemini-1.5-pro-001', 'gemini-1.5-flash-001',
+    'gemini-1.5-flash-8b-exp-0827', 'gemini-1.5-flash-8b-exp-0924',
+    'gemini-pro', 'gemini-1.0-pro', 'gemini-1.0-pro-001',
+    'gemma-3-27b-it',
+    // Wichtig: Füge die Free-Version von 2.5 Pro hinzu
+    'gemini-2.5-pro-exp-03-25:free'
+  ];
+
+  // Gemini 2.0 flash unterstützt "OFF" für alle Kategorien
+  // Füge auch die Preview-Version hinzu, die definitiv OFF unterstützt
+  const modelOffList = [
+    'gemini-2.0-flash', 'gemini-2.0-flash-001',
+    'gemini-2.0-flash-exp', 'gemini-2.0-flash-exp-image-generation',
+    'gemini-2.5-pro-preview-03-25'
+  ];
+
+  // Exakte Modellprüfung für unsere speziellen Modelle
+  if (modelName === 'google/gemini-2.5-pro-preview-03-25') {
+    // Für die Preview-Version können wir alles auf OFF setzen
+    safetySettings.forEach(setting => {
+      setting.threshold = 'OFF';
+    });
+    console.log('Gemini 2.5 Pro Preview erkannt: Verwende OFF für alle Safety-Einstellungen');
+  } 
+  else if (modelName === 'google/gemini-2.5-pro-exp-03-25:free') {
+    // Für die Free-Version müssen wir BLOCK_NONE verwenden
+    safetySettings.forEach(setting => {
+      setting.threshold = 'BLOCK_NONE';
+    });
+    console.log('Gemini 2.5 Pro Free erkannt: Verwende BLOCK_NONE für alle Safety-Einstellungen');
+  }
+  // Fallback auf Modell-Listen-Prüfung für andere Modelle
+  else if (modelBlockNoneList.some(model => modelName.includes(model))) {
+    // Ändere alle Thresholds auf BLOCK_NONE
+    safetySettings.forEach(setting => {
+      setting.threshold = 'BLOCK_NONE';
+    });
+  } 
+  else if (modelOffList.some(model => modelName.includes(model))) {
+    // Setze alles auf OFF (auch CIVIC_INTEGRITY)
+    safetySettings.forEach(setting => {
+      setting.threshold = 'OFF';
+    });
+  }
+
+  return safetySettings;
+}
+
 // Hilfsfunktion für Retry-Logik
-async function makeRequestWithRetry(url, data, headers, maxRetries = 2) {
+async function makeRequestWithRetry(url, data, headers, maxRetries = 2, isStream = false) {
   let lastError;
   
   for (let attempt = 0; attempt <= maxRetries; attempt++) {
     try {
       console.log(`API-Anfrage an OpenRouter (Versuch ${attempt + 1}/${maxRetries + 1})`);
       
-      const response = await apiClient.post(url, data, { headers });
+      // Stream-Modus oder regulärer Modus
+      const response = isStream
+        ? await apiClient.post(url, data, { 
+            headers,
+            responseType: 'stream'
+          })
+        : await apiClient.post(url, data, { headers });
       
       // Prüfen auf leere Antwort (typisch für Content-Filter)
-      if (response.data?.choices?.[0]?.message?.content === "" && 
+      if (!isStream && 
+          response.data?.choices?.[0]?.message?.content === "" && 
           response.data.usage?.completion_tokens === 0) {
         console.log("Gemini Content-Filter erkannt (leere Antwort)");
         return {
@@ -83,7 +167,38 @@ async function makeRequestWithRetry(url, data, headers, maxRetries = 2) {
   throw lastError; // Sollte nie erreicht werden, aber zur Sicherheit
 }
 
-// Erweiterte Proxy-Logik mit optionalem Model-Override
+// Stream-Handler-Funktion
+async function handleStreamResponse(openRouterStream, res) {
+  try {
+    // SSE (Server-Sent Events) Header setzen
+    res.writeHead(200, {
+      'Content-Type': 'text/event-stream',
+      'Cache-Control': 'no-cache',
+      'Connection': 'keep-alive'
+    });
+
+    // OpenRouter Stream an Client weiterleiten
+    openRouterStream.on('data', (chunk) => {
+      res.write(chunk);
+    });
+
+    openRouterStream.on('end', () => {
+      res.end();
+    });
+
+    openRouterStream.on('error', (error) => {
+      console.error('Stream Error:', error);
+      // Versuche, einen Fehler im Stream-Format zu senden
+      res.write(`data: {"error": {"message": "${error.message}"}}\n\n`);
+      res.end();
+    });
+  } catch (error) {
+    console.error('Stream Handling Error:', error);
+    res.status(500).json({ error: 'Stream processing error' });
+  }
+}
+
+// Erweiterte Proxy-Logik mit optionalem Model-Override und Streaming-Support
 async function handleProxyRequestWithModel(req, res, forceModel = null) {
   try {
     // API-Key aus dem Header oder als Query-Parameter extrahieren
@@ -122,27 +237,19 @@ async function handleProxyRequestWithModel(req, res, forceModel = null) {
     // Body übernehmen, den Janitor schickt
     const clientBody = req.body;
 
+    // Prüfe, ob Streaming angefordert wurde
+    const isStreamingRequested = clientBody.stream === true;
+    
+    // Modell bestimmen (entweder erzwungen oder aus dem Request)
+    const modelName = forceModel || clientBody.model;
+    
+    // Dynamische Safety Settings abhängig vom Modell
+    const dynamicSafetySettings = getSafetySettings(modelName);
+
     // Safety settings hinzufügen und ggf. das vorgegebene Modell
     const newBody = {
       ...clientBody,
-      safety_settings: [
-        {
-          category: 'HARM_CATEGORY_HARASSMENT',
-          threshold: 'BLOCK_NONE',
-        },
-        {
-          category: 'HARM_CATEGORY_HATE_SPEECH',
-          threshold: 'BLOCK_NONE',
-        },
-        {
-          category: 'HARM_CATEGORY_SEXUALLY_EXPLICIT',
-          threshold: 'BLOCK_NONE',
-        },
-        {
-          category: 'HARM_CATEGORY_DANGEROUS_CONTENT',
-          threshold: 'BLOCK_NONE',
-        },
-      ],
+      safety_settings: dynamicSafetySettings,
     };
 
     // Wenn ein Modell erzwungen werden soll, überschreibe das vom Client gesendete
@@ -151,13 +258,13 @@ async function handleProxyRequestWithModel(req, res, forceModel = null) {
       newBody.model = forceModel;
     }
 
-    // Leite es an Openrouter weiter (mit Retry-Logik):
+    // Leite es an Openrouter weiter (mit Retry-Logik)
     const headers = {
       'Content-Type': 'application/json',
       'Authorization': `Bearer ${apiKey}`,
       'User-Agent': 'JanitorAI-Proxy/1.0',
       'HTTP-Referer': 'https://janitorai.com',  // Hinzugefügt: Identifiziert die Quelle als Janitor.ai
-      'X-Title': 'Janitor.ai'                 // Hinzugefügt: Weitere Identifikation für OpenRouter
+      'X-Title': 'Janitor.ai'                   // Hinzugefügt: Weitere Identifikation für OpenRouter
     };
     
     // Füge Referrer auch im Body hinzu für vollständige Attribution
@@ -167,15 +274,25 @@ async function handleProxyRequestWithModel(req, res, forceModel = null) {
     newBody.metadata.referer = 'https://janitor.ai/';
     
     // Mit Retry-Logik anfragen - immer an den korrekten OpenRouter-Endpunkt
+    // Für Streaming einen anderen Endpunkt verwenden
+    const endpoint = isStreamingRequested ? '/chat/completions' : '/chat/completions';
+    
     const response = await makeRequestWithRetry(
-      '/chat/completions',  // Wichtig: Der richtige OpenRouter-Endpunkt
-      newBody,              // Body
-      headers               // Headers
+      endpoint,                // OpenRouter-Endpunkt
+      newBody,                 // Body
+      headers,                 // Headers
+      2,                       // Anzahl Retries
+      isStreamingRequested     // Stream-Modus
     );
 
-    // Antwort von Openrouter an den Client zurückgeben
     console.log(`== Openrouter-Antwort erhalten (${new Date().toISOString()}) ==`);
 
+    // Stream-Anfrage behandeln
+    if (isStreamingRequested && response.data) {
+      return handleStreamResponse(response.data, res);
+    }
+
+    // Normale Antwort verarbeiten
     // Prüfen auf Content-Filter (durch leere Antwort)
     if (response.data?.content_filtered) {
       console.log("Sende Gemini Content-Filter-Meldung");
@@ -332,14 +449,18 @@ app.post('/v1/chat/completions', async (req, res) => {
 app.get('/', (req, res) => {
   res.json({
     status: 'online',
-    version: '1.3.1',
-    info: 'JanitorAI ↔️ OpenRouter Proxy mit verbesserten Verbindungseinstellungen',
+    version: '1.4.0',
+    info: 'JanitorAI ↔️ OpenRouter Proxy mit dynamischen Safety-Settings und Streaming-Support',
     usage: 'Diesen Proxy mit JanitorAI verwenden - API-Key bei JanitorAI eingeben',
     endpoints: {
       standard: '/nofilter',          // Standard-Route ohne Modellzwang
       legacy: '/v1/chat/completions', // Legacy-Route ohne Modellzwang
       free: '/free',                  // Route mit kostenlosem Gemini-Modell
       paid: '/cash'                   // Route mit kostenpflichtigem Gemini-Modell
+    },
+    features: {
+      streaming: 'Aktiviert',
+      dynamicSafety: 'Optimiert für google/gemini-2.5-pro-preview-03-25 und google/gemini-2.5-pro-exp-03-25:free'
     }
   });
 });
