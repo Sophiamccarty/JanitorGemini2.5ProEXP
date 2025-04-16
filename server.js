@@ -513,7 +513,7 @@ async function handleProxyRequestWithModel(req, res, forceModel = null, useJailb
         choices: [
           {
             message: {
-              content: "IMPORTANT: FUCKING OpenRouter now requires users to purchase at least 10 credits to use the free experimental model. Please type /cash to use the paid version instead, or purchase credits on OpenRouter.ai. YES I ALSO CRY!"
+              content: "IMPORTANT: FUCKIN OpenRouter now requires users to purchase at least 10 credits to use the free experimental model. Please type /cash to use the paid version instead, or purchase credits on OpenRouter.ai. YEAH IM CRYING TOO!"
             }
           }
         ]
