@@ -453,8 +453,8 @@ app.get('/', (req, res) => {
   res.json({
     status: 'online',
     version: '1.4.0',
-    info: 'JanitorAI ↔️ OpenRouter Proxy mit dynamischen Safety-Settings und Streaming-Support',
-    usage: 'Diesen Proxy mit JanitorAI verwenden - API-Key bei JanitorAI eingeben',
+    info: 'GEMINI UNBLOCKER V.1.1 by Sophiamccarty',
+    usage: 'FULL NSWF/VIOLENCE SUPPORT FOR JANITOR.AI',
     endpoints: {
       standard: '/nofilter',          // Standard-Route ohne Modellzwang
       legacy: '/v1/chat/completions', // Legacy-Route ohne Modellzwang
