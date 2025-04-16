@@ -503,27 +503,35 @@ async function handleProxyRequestWithModel(req, res, forceModel = null, useJailb
     // Extrahiere Fehlermeldung
     let errorMessage = "Unknown error";
     
-    // Wichtig! Prüfe zu Beginn auf 404 Fehler für das kostenlose Modell
-    if (error.response?.status === 404) {
-      console.log("404 Fehler erkannt - wahrscheinlich freies Modell nicht verfügbar");
-      return res.status(200).json({
-        choices: [
-          {
-            message: {
-              content: "FUCKING OpenRouter has restricted access to the free experimental model. You now need to purchase at least FUCKING 10 credits to use it. Please type /cash to use the paid version instead, or purchase FUCKING credits on OpenRouter.ai. YEAH I CRY TOO!"
-            }
-          }
-        ]
-      });
-    }
-    
-    // Regular error handling continues
+    // Prüfe auf verschiedene Fehlertypen
     if (error.code === 'ECONNABORTED') {
       errorMessage = "Request timeout: The API took too long to respond";
     } else if (error.code === 'ECONNRESET') {
       errorMessage = "Connection reset: The connection was interrupted";
     } else if (error.message.includes('timeout')) {
       errorMessage = "Connection timeout: The API didn't respond in time";
+    } 
+    // NEW: Handle 404 errors for the experimental model
+    else if (error.response?.status === 404 || 
+             error.response?.data?.error?.message?.includes('experimental google/gemini-2.5-pro-exp-03-25 model has been limited') ||
+             error.response?.data?.error?.message?.includes('usage of the experimental google/gemini') ||
+             error.response?.data?.error?.message?.includes('limited to OpenRouter users') ||
+             error.response?.data?.error?.message?.includes('purchased at least 10 credits') ||
+             error.response?.data?.error?.message?.includes('Error 404') ||
+             error.response?.data?.error?.message?.includes('model not found') ||
+             error.response?.data?.error?.message?.includes('gemini-2.5-pro-exp-03-25:free') ||
+             error.message?.includes('404 Not Found') ||
+             error.message?.includes('model access restricted')) {
+      // Spezifischer Fehler für die Einschränkung der kostenlosen Version
+      return res.status(200).json({
+        choices: [
+          {
+            message: {
+              content: "Oh my gosh, usage of the experimental Google FUCKING Gemini 2.5 Pro Free model is FUCKING limited to FUCKING OpenRouter users who have FUCKING purchased at least 10 credits. Please consider using the paid version at https://openrouter.ai/google/gemini-2.5-pro-preview-03-25 or adding your own API keys in https://openrouter.ai/settings/integrations. YEAH BECAUSE WE'RE FUCKING RICH BITCHES."
+            }
+          }
+        ]
+      });
     } else if (error.response?.status === 429) {
       // Rate Limit Fehler
       return res.status(200).json({
@@ -537,6 +545,7 @@ async function handleProxyRequestWithModel(req, res, forceModel = null, useJailb
       });
     } else if (error.response?.status === 403 || 
                error.message?.includes('PROHIBITED_CONTENT') ||
+               error.message?.includes('pgshag2') || 
                error.message?.includes('No response from bot')) {
       // Content-Filter Fehler
       return res.status(200).json({
@@ -548,9 +557,6 @@ async function handleProxyRequestWithModel(req, res, forceModel = null, useJailb
           }
         ]
       });
-    } else if (error.response?.status === 404) {
-      // General 404 error handling
-      errorMessage = "Model not found or not accessible. Please try a different model.";
     } else if (error.response?.data?.error?.message) {
       errorMessage = error.response.data.error.message;
     } else if (error.message) {
@@ -622,7 +628,7 @@ app.post('/v1/chat/completions', async (req, res) => {
 app.get('/', (req, res) => {
   res.json({
     status: 'online',
-    version: '1.5.1',
+    version: '1.5.0',
     info: 'GEMINI UNBLOCKER V.1.2 by Sophiamccarty',
     usage: 'FULL NSWF/VIOLENCE SUPPORT FOR JANITOR.AI',
     endpoints: {
@@ -636,8 +642,7 @@ app.get('/', (req, res) => {
     features: {
       streaming: 'Aktiviert',
       dynamicSafety: 'Optimiert für google/gemini-2.5-pro-preview-03-25 und google/gemini-2.5-pro-exp-03-25:free (beide mit OFF-Setting)',
-      jailbreak: 'Verfügbar über /jbfree und /jbcash',
-      notice: 'Free experimental model requires 10 credits purchased from OpenRouter - use /cash for paid model if you encounter errors'
+      jailbreak: 'Verfügbar über /freejb und /cashjb'
     }
   });
 });
