@@ -1,3 +1,6 @@
+/*************************************************
+ * server.js - Node/Express + Axios + CORS Proxy für JanitorAI
+ *************************************************/
 const express = require('express');
 const axios = require('axios');
 const cors = require('cors');
@@ -7,15 +10,8 @@ const https = require('https');
 // Erzeuge eine Express-App
 const app = express();
 
-// 1) CORS erlauben (wichtig für Browser-Anfragen) mit erweiterter Konfiguration
-app.use(cors({
-  origin: '*',
-  methods: ['GET', 'POST', 'OPTIONS', 'PUT', 'PATCH', 'DELETE'],
-  allowedHeaders: ['Content-Type', 'Authorization', 'X-API-Key']
-}));
-
-// OPTIONS-Anfragen für CORS Preflight explizit erlauben
-app.options('*', cors());
+// 1) CORS erlauben (wichtig für Browser-Anfragen)
+app.use(cors());
 
 // 2) JSON mit erhöhtem Limit parsen, z. B. 100MB
 app.use(express.json({ limit: '100mb' }));
@@ -38,7 +34,7 @@ const apiClient = axios.create({
   baseURL: 'https://openrouter.ai/api/v1'
 });
 
-// Dynamische Safety Settings basierend auf dem Modell
+// NEU: Dynamische Safety Settings basierend auf dem Modell
 function getSafetySettings(modelName) {
   // Basis-Safety-Settings (für die meisten Modelle)
   const defaultSafetySettings = [
@@ -118,64 +114,7 @@ function getSafetySettings(modelName) {
   return safetySettings;
 }
 
-// Hilfsfunktion für Retry-Logik
-async function makeRequestWithRetry(url, data, headers, maxRetries = 2, isStream = false) {
-  let lastError;
-  
-  for (let attempt = 0; attempt <= maxRetries; attempt++) {
-    try {
-      console.log(`API-Anfrage an OpenRouter (Versuch ${attempt + 1}/${maxRetries + 1})`);
-      
-      // Stream-Modus oder regulärer Modus
-      const response = isStream
-        ? await apiClient.post(url, data, { 
-            headers,
-            responseType: 'stream'
-          })
-        : await apiClient.post(url, data, { headers });
-      
-      // Prüfen auf leere Antwort (typisch für Content-Filter)
-      if (!isStream && 
-          response.data?.choices?.[0]?.message?.content === "" && 
-          response.data.usage?.completion_tokens === 0) {
-        console.log("Gemini Content-Filter erkannt (leere Antwort)");
-        return {
-          status: 200,
-          data: {
-            content_filtered: true
-          }
-        };
-      }
-      
-      return response; // Erfolg! Beende Schleife und gib Response zurück
-      
-    } catch (error) {
-      lastError = error;
-      
-      // Prüfe, ob es ein Fehler ist, der ein Retry rechtfertigt
-      const status = error.response?.status;
-      
-      // 429 (Rate Limit) oder 5xx (Server-Fehler) rechtfertigen Retry
-      const shouldRetry = (status === 429 || (status >= 500 && status < 600));
-      
-      if (shouldRetry && attempt < maxRetries) {
-        // Verbessertes Exponential Backoff für Rate Limits: 5s, 10s, 20s, ...
-        const baseDelay = status === 429 ? 5000 : 1000; // 5 Sekunden Basis-Delay für Rate Limits
-        const delay = baseDelay * Math.pow(2, attempt);
-        console.log(`Wiederhole in ${delay}ms (Status ${status})`);
-        await new Promise(resolve => setTimeout(resolve, delay));
-        continue;
-      }
-      
-      // Kein Retry möglich oder maximale Anzahl erreicht
-      throw error;
-    }
-  }
-  
-  throw lastError; // Sollte nie erreicht werden, aber zur Sicherheit
-}
-
-// Stream-Handler-Funktion mit verbesserter Fehlerbehandlung
+// NEU: Stream-Handler-Funktion
 async function handleStreamResponse(openRouterStream, res) {
   try {
     // Prüfe, ob die Verbindung noch offen ist
@@ -247,7 +186,63 @@ async function handleStreamResponse(openRouterStream, res) {
   }
 }
 
-// Erweiterte Proxy-Logik mit optionalem Model-Override und Streaming-Support
+// GEÄNDERT: Hilfsfunktion für Retry-Logik mit Stream-Support
+async function makeRequestWithRetry(url, data, headers, maxRetries = 2, isStream = false) {
+  let lastError;
+  
+  for (let attempt = 0; attempt <= maxRetries; attempt++) {
+    try {
+      console.log(`API-Anfrage an OpenRouter (Versuch ${attempt + 1}/${maxRetries + 1})`);
+      
+      // Stream-Modus oder regulärer Modus
+      const response = isStream
+        ? await apiClient.post(url, data, { 
+            headers,
+            responseType: 'stream'
+          })
+        : await apiClient.post(url, data, { headers });
+      
+      // Prüfen auf leere Antwort (typisch für Content-Filter)
+      if (!isStream && 
+          response.data?.choices?.[0]?.message?.content === "" && 
+          response.data.usage?.completion_tokens === 0) {
+        console.log("Gemini Content-Filter erkannt (leere Antwort)");
+        return {
+          status: 200,
+          data: {
+            content_filtered: true
+          }
+        };
+      }
+      
+      return response; // Erfolg! Beende Schleife und gib Response zurück
+      
+    } catch (error) {
+      lastError = error;
+      
+      // Prüfe, ob es ein Fehler ist, der ein Retry rechtfertigt
+      const status = error.response?.status;
+      
+      // 429 (Rate Limit) oder 5xx (Server-Fehler) rechtfertigen Retry
+      const shouldRetry = (status === 429 || (status >= 500 && status < 600));
+      
+      if (shouldRetry && attempt < maxRetries) {
+        // Exponential Backoff: 1s, 2s, 4s, ...
+        const delay = 1000 * Math.pow(2, attempt);
+        console.log(`Wiederhole in ${delay}ms (Status ${status})`);
+        await new Promise(resolve => setTimeout(resolve, delay));
+        continue;
+      }
+      
+      // Kein Retry möglich oder maximale Anzahl erreicht
+      throw error;
+    }
+  }
+  
+  throw lastError; // Sollte nie erreicht werden, aber zur Sicherheit
+}
+
+// GEÄNDERT: Erweiterte Proxy-Logik mit optionalem Model-Override und Streaming-Support
 async function handleProxyRequestWithModel(req, res, forceModel = null) {
   try {
     // API-Key aus dem Header oder als Query-Parameter extrahieren
@@ -272,15 +267,10 @@ async function handleProxyRequestWithModel(req, res, forceModel = null) {
       apiKey = req.query.api_key;
     }
 
-    // Verbesserte API-Key-Validierung
-    if (!apiKey || apiKey.length < 32) { // Die meisten API-Keys sind mindestens 32 Zeichen lang
-      console.log("Potenziell ungültiger API-Key-Format", apiKey ? (apiKey.substring(0, 5) + "...") : "leer");
+    // Kein API-Key gefunden
+    if (!apiKey) {
       return res.status(401).json({
-        choices: [{
-          message: {
-            content: "Dein OpenRouter API-Key scheint ungültig zu sein. Bitte überprüfe ihn. Ein gültiger OpenRouter API-Key beginnt mit 'sk-or-' und ist deutlich länger."
-          }
-        }]
+        error: 'Openrouter API-Key fehlt. Bitte gib deinen API-Key bei JanitorAI ein.'
       });
     }
 
@@ -290,14 +280,14 @@ async function handleProxyRequestWithModel(req, res, forceModel = null) {
 
     // Body übernehmen, den Janitor schickt
     const clientBody = req.body;
-
-    // Prüfe, ob Streaming angefordert wurde
+    
+    // NEU: Prüfe, ob Streaming angefordert wurde
     const isStreamingRequested = clientBody.stream === true;
     
     // Modell bestimmen (entweder erzwungen oder aus dem Request)
     const modelName = forceModel || clientBody.model;
     
-    // Dynamische Safety Settings abhängig vom Modell
+    // NEU: Dynamische Safety Settings abhängig vom Modell
     const dynamicSafetySettings = getSafetySettings(modelName);
 
     // Safety settings hinzufügen und ggf. das vorgegebene Modell
@@ -312,13 +302,13 @@ async function handleProxyRequestWithModel(req, res, forceModel = null) {
       newBody.model = forceModel;
     }
 
-    // Leite es an Openrouter weiter (mit Retry-Logik)
+    // Leite es an Openrouter weiter (mit Retry-Logik):
     const headers = {
       'Content-Type': 'application/json',
       'Authorization': `Bearer ${apiKey}`,
       'User-Agent': 'JanitorAI-Proxy/1.0',
       'HTTP-Referer': 'https://janitorai.com',  // Hinzugefügt: Identifiziert die Quelle als Janitor.ai
-      'X-Title': 'Janitor.ai'                   // Hinzugefügt: Weitere Identifikation für OpenRouter
+      'X-Title': 'Janitor.ai'                 // Hinzugefügt: Weitere Identifikation für OpenRouter
     };
     
     // Füge Referrer auch im Body hinzu für vollständige Attribution
@@ -328,32 +318,25 @@ async function handleProxyRequestWithModel(req, res, forceModel = null) {
     newBody.metadata.referer = 'https://janitor.ai/';
     
     // Mit Retry-Logik anfragen - immer an den korrekten OpenRouter-Endpunkt
-    // Für Streaming einen anderen Endpunkt verwenden
-    const endpoint = isStreamingRequested ? '/chat/completions' : '/chat/completions';
+    const endpoint = '/chat/completions';  // Wichtig: Der richtige OpenRouter-Endpunkt
     
+    // GEÄNDERT: Stream-Parameter übergeben
     const response = await makeRequestWithRetry(
       endpoint,                // OpenRouter-Endpunkt
       newBody,                 // Body
       headers,                 // Headers
       2,                       // Anzahl Retries
-      isStreamingRequested     // Stream-Modus
+      isStreamingRequested     // Stream-Modus - NEU
     );
 
-    // Erweiterte Logging für bessere Diagnose
+    // Antwort von Openrouter an den Client zurückgeben
     console.log(`== Openrouter-Antwort erhalten (${new Date().toISOString()}) ==`);
-    console.log(`Status: ${response.status}, Headers: ${JSON.stringify(response.headers || {})}`);
-    if (response.data && !isStreamingRequested) {
-      // Nur die ersten 200 Zeichen loggen, um das Log nicht zu überfüllen
-      const responsePreview = JSON.stringify(response.data).substring(0, 200);
-      console.log(`Antwort-Daten (Ausschnitt): ${responsePreview}...`);
-    }
 
-    // Stream-Anfrage behandeln
+    // NEU: Stream-Anfrage behandeln
     if (isStreamingRequested && response.data) {
       return handleStreamResponse(response.data, res);
     }
 
-    // Normale Antwort verarbeiten
     // Prüfen auf Content-Filter (durch leere Antwort)
     if (response.data?.content_filtered) {
       console.log("Sende Gemini Content-Filter-Meldung");
@@ -368,7 +351,7 @@ async function handleProxyRequestWithModel(req, res, forceModel = null) {
     
     // Prüfe, ob es eine Fehlerantwort von Openrouter ist
     if (response.data.error) {
-      console.log("Fehler erkannt in Openrouter-Antwort:", JSON.stringify(response.data.error).substring(0, 200));
+      console.log("Fehler erkannt in Openrouter-Antwort");
       
       // Prüfe auf den Quota-Fehler in der Antwort
       if (response.data.error.code === 429 || 
@@ -412,31 +395,23 @@ async function handleProxyRequestWithModel(req, res, forceModel = null) {
     return res.json(response.data);
 
   } catch (error) {
-    // Verbesserte Fehlerbehandlung mit spezifischeren Logs
+    // Log Details des Fehlers (knapp)
     console.error("Error in Proxy:", error.message);
     if (error.response) {
       console.error("Status:", error.response.status);
-      // Log mehr Details zur Fehlerantwort
-      if (error.response.data) {
-        console.error("Response data:", JSON.stringify(error.response.data).substring(0, 300));
-      }
     }
     
     // Extrahiere Fehlermeldung
     let errorMessage = "Unknown error";
     
-    // Verbesserte Prüfung auf verschiedene Fehlertypen
+    // Prüfe auf verschiedene Fehlertypen
     if (error.code === 'ECONNABORTED') {
-      console.error("Timeout-Fehler beim Verbinden mit OpenRouter");
       errorMessage = "Request timeout: The API took too long to respond";
     } else if (error.code === 'ECONNRESET') {
-      console.error("Connection Reset-Fehler beim Verbinden mit OpenRouter");
       errorMessage = "Connection reset: The connection was interrupted";
     } else if (error.message.includes('timeout')) {
-      console.error("Timeout-Fehler beim Verbinden mit OpenRouter");
       errorMessage = "Connection timeout: The API didn't respond in time";
     } else if (error.response?.status === 429) {
-      console.error("Rate Limit erreicht (429)");
       // Rate Limit Fehler
       return res.status(200).json({
         choices: [
@@ -451,7 +426,6 @@ async function handleProxyRequestWithModel(req, res, forceModel = null) {
                error.message?.includes('PROHIBITED_CONTENT') ||
                error.message?.includes('pgshag2') || 
                error.message?.includes('No response from bot')) {
-      console.error("Content-Filter ausgelöst (403 oder spezieller Fehlercode)");
       // Content-Filter Fehler
       return res.status(200).json({
         choices: [
@@ -467,9 +441,6 @@ async function handleProxyRequestWithModel(req, res, forceModel = null) {
     } else if (error.message) {
       errorMessage = error.message;
     }
-    
-    // Log der finalen Fehlermeldung
-    console.error("Finale Fehlermeldung an Client:", errorMessage);
     
     // Konsistentes Fehlerformat für Janitor
     return res.status(200).json({
@@ -490,61 +461,40 @@ async function handleProxyRequest(req, res) {
   return handleProxyRequestWithModel(req, res);
 }
 
-// Definiere zuerst alle Routen für verschiedene Methoden, bevor die Methoden-Überprüfung erfolgt
 // Route "/free" - Erzwingt das kostenlose Gemini-Modell
-app.all('/free', async (req, res) => {
+app.post('/free', async (req, res) => {
   const requestTimestamp = new Date().toISOString();
-  console.log(`== Neue Anfrage über /free (${requestTimestamp}) mit Methode ${req.method} ==`);
+  console.log(`== Neue Anfrage über /free (${requestTimestamp}) ==`);
   await handleProxyRequestWithModel(req, res, "google/gemini-2.5-pro-exp-03-25:free");
 });
 
 // Route "/cash" - Erzwingt das kostenpflichtige Gemini-Modell
-app.all('/cash', async (req, res) => {
+app.post('/cash', async (req, res) => {
   const requestTimestamp = new Date().toISOString();
-  console.log(`== Neue Anfrage über /cash (${requestTimestamp}) mit Methode ${req.method} ==`);
+  console.log(`== Neue Anfrage über /cash (${requestTimestamp}) ==`);
   await handleProxyRequestWithModel(req, res, "google/gemini-2.5-pro-preview-03-25");
 });
 
 // Bestehende Proxy-Route "/nofilter" - Modell frei wählbar
-app.all('/nofilter', async (req, res) => {
+app.post('/nofilter', async (req, res) => {
   const requestTimestamp = new Date().toISOString();
-  console.log(`== Neue Anfrage über /nofilter (${requestTimestamp}) mit Methode ${req.method} ==`);
+  console.log(`== Neue Anfrage über /nofilter (${requestTimestamp}) ==`);
   await handleProxyRequest(req, res);
 });
 
 // Für Abwärtskompatibilität alte Route beibehalten - Modell frei wählbar
-app.all('/v1/chat/completions', async (req, res) => {
+app.post('/v1/chat/completions', async (req, res) => {
   const requestTimestamp = new Date().toISOString();
-  console.log(`== Neue Anfrage über alte Route /v1/chat/completions (${requestTimestamp}) mit Methode ${req.method} ==`);
+  console.log(`== Neue Anfrage über alte Route /v1/chat/completions (${requestTimestamp}) ==`);
   await handleProxyRequest(req, res);
-});
-
-// ERST JETZT Methoden-Logging Middleware hinzufügen - nach den Routendefinitionen
-app.use((req, res, next) => {
-  const requestMethod = req.method;
-  const requestPath = req.path;
-  console.log(`Unbekannte Anfrage: ${requestMethod} ${requestPath}`);
-  
-  // Für unbekannte Routen 404 zurückgeben
-  if (!res.headersSent) {
-    return res.status(404).json({
-      choices: [{
-        message: {
-          content: `ERROR: Endpoint ${requestPath} not found. Available endpoints are /free, /cash, /nofilter and /v1/chat/completions.`
-        }
-      }]
-    });
-  }
-  
-  next();
 });
 
 // Einfache Statusroute aktualisieren mit neuen Endpunkten
 app.get('/', (req, res) => {
   res.json({
     status: 'online',
-    version: '1.5.1',
-    info: 'JanitorAI ↔️ OpenRouter Proxy mit dynamischen Safety-Settings und Streaming-Support',
+    version: '1.3.2',
+    info: 'JanitorAI ↔️ OpenRouter Proxy mit Streaming-Support und dynamischen Safety-Settings',
     usage: 'Diesen Proxy mit JanitorAI verwenden - API-Key bei JanitorAI eingeben',
     endpoints: {
       standard: '/nofilter',          // Standard-Route ohne Modellzwang
@@ -554,9 +504,7 @@ app.get('/', (req, res) => {
     },
     features: {
       streaming: 'Aktiviert',
-      dynamicSafety: 'Optimiert für google/gemini-2.5-pro-preview-03-25 und google/gemini-2.5-pro-exp-03-25:free (beide mit OFF-Setting)',
-      diagnostics: 'Erweiterte Fehlerdiagnose aktiv',
-      methods: 'Unterstützt GET, POST, PUT, PATCH, DELETE für alle Endpoints'
+      dynamicSafety: 'Optimiert für google/gemini-2.5-pro-preview-03-25 und google/gemini-2.5-pro-exp-03-25:free (beide mit OFF-Setting)'
     }
   });
 });
