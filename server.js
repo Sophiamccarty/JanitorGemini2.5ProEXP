@@ -1,6 +1,3 @@
-/*************************************************
- * server.js - Node/Express + Axios + CORS Proxy für JanitorAI
- *************************************************/
 const express = require('express');
 const axios = require('axios');
 const cors = require('cors');
@@ -34,7 +31,7 @@ const apiClient = axios.create({
   baseURL: 'https://openrouter.ai/api/v1'
 });
 
-// NEU: Dynamische Safety Settings basierend auf dem Modell
+// Dynamische Safety Settings basierend auf dem Modell
 function getSafetySettings(modelName) {
   // Basis-Safety-Settings (für die meisten Modelle)
   const defaultSafetySettings = [
@@ -114,79 +111,7 @@ function getSafetySettings(modelName) {
   return safetySettings;
 }
 
-// NEU: Stream-Handler-Funktion
-async function handleStreamResponse(openRouterStream, res) {
-  try {
-    // Prüfe, ob die Verbindung noch offen ist
-    if (res.writableEnded) {
-      console.log('Client hat die Verbindung bereits geschlossen, Stream wird beendet');
-      return;
-    }
-
-    // SSE (Server-Sent Events) Header setzen
-    res.writeHead(200, {
-      'Content-Type': 'text/event-stream',
-      'Cache-Control': 'no-cache',
-      'Connection': 'keep-alive',
-      'X-Accel-Buffering': 'no' // Verhindert Proxy-Buffering (für Nginx)
-    });
-
-    // Flag für Stream-Status
-    let streamActive = true;
-
-    // Client-Verbindungsabbruch erkennen
-    res.on('close', () => {
-      console.log('Client hat die Verbindung geschlossen');
-      streamActive = false;
-      // Versuche, den Upstream-Stream zu beenden
-      if (openRouterStream.destroy && typeof openRouterStream.destroy === 'function') {
-        openRouterStream.destroy();
-      }
-    });
-
-    // OpenRouter Stream an Client weiterleiten
-    openRouterStream.on('data', (chunk) => {
-      if (streamActive && !res.writableEnded) {
-        try {
-          res.write(chunk);
-        } catch (e) {
-          console.error('Fehler beim Schreiben in den Stream:', e.message);
-          streamActive = false;
-        }
-      }
-    });
-
-    openRouterStream.on('end', () => {
-      if (streamActive && !res.writableEnded) {
-        try {
-          res.end();
-        } catch (e) {
-          console.error('Fehler beim Beenden des Streams:', e.message);
-        }
-      }
-    });
-
-    openRouterStream.on('error', (error) => {
-      console.error('Stream Error:', error);
-      if (streamActive && !res.writableEnded) {
-        try {
-          // Versuche, einen Fehler im Stream-Format zu senden
-          res.write(`data: {"error": {"message": "${error.message}"}}\n\n`);
-          res.end();
-        } catch (e) {
-          console.error('Fehler beim Senden der Fehlermeldung im Stream:', e.message);
-        }
-      }
-    });
-  } catch (error) {
-    console.error('Stream Handling Error:', error);
-    if (!res.headersSent) {
-      res.status(500).json({ error: 'Stream processing error' });
-    }
-  }
-}
-
-// GEÄNDERT: Hilfsfunktion für Retry-Logik mit Stream-Support
+// Hilfsfunktion für Retry-Logik
 async function makeRequestWithRetry(url, data, headers, maxRetries = 2, isStream = false) {
   let lastError;
   
@@ -242,7 +167,38 @@ async function makeRequestWithRetry(url, data, headers, maxRetries = 2, isStream
   throw lastError; // Sollte nie erreicht werden, aber zur Sicherheit
 }
 
-// GEÄNDERT: Erweiterte Proxy-Logik mit optionalem Model-Override und Streaming-Support
+// Stream-Handler-Funktion
+async function handleStreamResponse(openRouterStream, res) {
+  try {
+    // SSE (Server-Sent Events) Header setzen
+    res.writeHead(200, {
+      'Content-Type': 'text/event-stream',
+      'Cache-Control': 'no-cache',
+      'Connection': 'keep-alive'
+    });
+
+    // OpenRouter Stream an Client weiterleiten
+    openRouterStream.on('data', (chunk) => {
+      res.write(chunk);
+    });
+
+    openRouterStream.on('end', () => {
+      res.end();
+    });
+
+    openRouterStream.on('error', (error) => {
+      console.error('Stream Error:', error);
+      // Versuche, einen Fehler im Stream-Format zu senden
+      res.write(`data: {"error": {"message": "${error.message}"}}\n\n`);
+      res.end();
+    });
+  } catch (error) {
+    console.error('Stream Handling Error:', error);
+    res.status(500).json({ error: 'Stream processing error' });
+  }
+}
+
+// Erweiterte Proxy-Logik mit optionalem Model-Override und Streaming-Support
 async function handleProxyRequestWithModel(req, res, forceModel = null) {
   try {
     // API-Key aus dem Header oder als Query-Parameter extrahieren
@@ -280,14 +236,14 @@ async function handleProxyRequestWithModel(req, res, forceModel = null) {
 
     // Body übernehmen, den Janitor schickt
     const clientBody = req.body;
-    
-    // NEU: Prüfe, ob Streaming angefordert wurde
+
+    // Prüfe, ob Streaming angefordert wurde
     const isStreamingRequested = clientBody.stream === true;
     
     // Modell bestimmen (entweder erzwungen oder aus dem Request)
     const modelName = forceModel || clientBody.model;
     
-    // NEU: Dynamische Safety Settings abhängig vom Modell
+    // Dynamische Safety Settings abhängig vom Modell
     const dynamicSafetySettings = getSafetySettings(modelName);
 
     // Safety settings hinzufügen und ggf. das vorgegebene Modell
@@ -302,13 +258,13 @@ async function handleProxyRequestWithModel(req, res, forceModel = null) {
       newBody.model = forceModel;
     }
 
-    // Leite es an Openrouter weiter (mit Retry-Logik):
+    // Leite es an Openrouter weiter (mit Retry-Logik)
     const headers = {
       'Content-Type': 'application/json',
       'Authorization': `Bearer ${apiKey}`,
       'User-Agent': 'JanitorAI-Proxy/1.0',
       'HTTP-Referer': 'https://janitorai.com',  // Hinzugefügt: Identifiziert die Quelle als Janitor.ai
-      'X-Title': 'Janitor.ai'                 // Hinzugefügt: Weitere Identifikation für OpenRouter
+      'X-Title': 'Janitor.ai'                   // Hinzugefügt: Weitere Identifikation für OpenRouter
     };
     
     // Füge Referrer auch im Body hinzu für vollständige Attribution
@@ -318,25 +274,25 @@ async function handleProxyRequestWithModel(req, res, forceModel = null) {
     newBody.metadata.referer = 'https://janitor.ai/';
     
     // Mit Retry-Logik anfragen - immer an den korrekten OpenRouter-Endpunkt
-    const endpoint = '/chat/completions';  // Wichtig: Der richtige OpenRouter-Endpunkt
+    // Für Streaming einen anderen Endpunkt verwenden
+    const endpoint = isStreamingRequested ? '/chat/completions' : '/chat/completions';
     
-    // GEÄNDERT: Stream-Parameter übergeben
     const response = await makeRequestWithRetry(
       endpoint,                // OpenRouter-Endpunkt
       newBody,                 // Body
       headers,                 // Headers
       2,                       // Anzahl Retries
-      isStreamingRequested     // Stream-Modus - NEU
+      isStreamingRequested     // Stream-Modus
     );
 
-    // Antwort von Openrouter an den Client zurückgeben
     console.log(`== Openrouter-Antwort erhalten (${new Date().toISOString()}) ==`);
 
-    // NEU: Stream-Anfrage behandeln
+    // Stream-Anfrage behandeln
     if (isStreamingRequested && response.data) {
       return handleStreamResponse(response.data, res);
     }
 
+    // Normale Antwort verarbeiten
     // Prüfen auf Content-Filter (durch leere Antwort)
     if (response.data?.content_filtered) {
       console.log("Sende Gemini Content-Filter-Meldung");
@@ -493,8 +449,8 @@ app.post('/v1/chat/completions', async (req, res) => {
 app.get('/', (req, res) => {
   res.json({
     status: 'online',
-    version: '1.3.2',
-    info: 'JanitorAI ↔️ OpenRouter Proxy mit Streaming-Support und dynamischen Safety-Settings',
+    version: '1.4.0',
+    info: 'JanitorAI ↔️ OpenRouter Proxy mit dynamischen Safety-Settings und Streaming-Support',
     usage: 'Diesen Proxy mit JanitorAI verwenden - API-Key bei JanitorAI eingeben',
     endpoints: {
       standard: '/nofilter',          // Standard-Route ohne Modellzwang
