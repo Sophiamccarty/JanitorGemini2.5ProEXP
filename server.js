@@ -7,8 +7,15 @@ const https = require('https');
 // Erzeuge eine Express-App
 const app = express();
 
-// 1) CORS erlauben (wichtig für Browser-Anfragen)
-app.use(cors());
+// 1) CORS erlauben (wichtig für Browser-Anfragen) mit erweiterter Konfiguration
+app.use(cors({
+  origin: '*',
+  methods: ['GET', 'POST', 'OPTIONS', 'PUT', 'PATCH', 'DELETE'],
+  allowedHeaders: ['Content-Type', 'Authorization', 'X-API-Key']
+}));
+
+// OPTIONS-Anfragen für CORS Preflight explizit erlauben
+app.options('*', cors());
 
 // 2) JSON mit erhöhtem Limit parsen, z. B. 100MB
 app.use(express.json({ limit: '100mb' }));
@@ -168,34 +175,75 @@ async function makeRequestWithRetry(url, data, headers, maxRetries = 2, isStream
   throw lastError; // Sollte nie erreicht werden, aber zur Sicherheit
 }
 
-// Stream-Handler-Funktion
+// Stream-Handler-Funktion mit verbesserter Fehlerbehandlung
 async function handleStreamResponse(openRouterStream, res) {
   try {
+    // Prüfe, ob die Verbindung noch offen ist
+    if (res.writableEnded) {
+      console.log('Client hat die Verbindung bereits geschlossen, Stream wird beendet');
+      return;
+    }
+
     // SSE (Server-Sent Events) Header setzen
     res.writeHead(200, {
       'Content-Type': 'text/event-stream',
       'Cache-Control': 'no-cache',
-      'Connection': 'keep-alive'
+      'Connection': 'keep-alive',
+      'X-Accel-Buffering': 'no' // Verhindert Proxy-Buffering (für Nginx)
+    });
+
+    // Flag für Stream-Status
+    let streamActive = true;
+
+    // Client-Verbindungsabbruch erkennen
+    res.on('close', () => {
+      console.log('Client hat die Verbindung geschlossen');
+      streamActive = false;
+      // Versuche, den Upstream-Stream zu beenden
+      if (openRouterStream.destroy && typeof openRouterStream.destroy === 'function') {
+        openRouterStream.destroy();
+      }
     });
 
     // OpenRouter Stream an Client weiterleiten
     openRouterStream.on('data', (chunk) => {
-      res.write(chunk);
+      if (streamActive && !res.writableEnded) {
+        try {
+          res.write(chunk);
+        } catch (e) {
+          console.error('Fehler beim Schreiben in den Stream:', e.message);
+          streamActive = false;
+        }
+      }
     });
 
     openRouterStream.on('end', () => {
-      res.end();
+      if (streamActive && !res.writableEnded) {
+        try {
+          res.end();
+        } catch (e) {
+          console.error('Fehler beim Beenden des Streams:', e.message);
+        }
+      }
     });
 
     openRouterStream.on('error', (error) => {
       console.error('Stream Error:', error);
-      // Versuche, einen Fehler im Stream-Format zu senden
-      res.write(`data: {"error": {"message": "${error.message}"}}\n\n`);
-      res.end();
+      if (streamActive && !res.writableEnded) {
+        try {
+          // Versuche, einen Fehler im Stream-Format zu senden
+          res.write(`data: {"error": {"message": "${error.message}"}}\n\n`);
+          res.end();
+        } catch (e) {
+          console.error('Fehler beim Senden der Fehlermeldung im Stream:', e.message);
+        }
+      }
     });
   } catch (error) {
     console.error('Stream Handling Error:', error);
-    res.status(500).json({ error: 'Stream processing error' });
+    if (!res.headersSent) {
+      res.status(500).json({ error: 'Stream processing error' });
+    }
   }
 }
 
@@ -499,6 +547,51 @@ app.get('/health', (req, res) => {
     memory: process.memoryUsage(),
     timestamp: new Date().toISOString()
   });
+});
+
+// Methoden-Logging Middleware hinzufügen
+app.use((req, res, next) => {
+  const requestMethod = req.method;
+  const requestPath = req.path;
+  console.log(`Eingehende Anfrage: ${requestMethod} ${requestPath}`);
+  
+  // Explizite Behandlung von nicht unterstützten Methoden
+  if (!['GET', 'POST', 'OPTIONS'].includes(requestMethod) && 
+      (requestPath.includes('/free') || requestPath.includes('/cash') || 
+       requestPath.includes('/nofilter') || requestPath.includes('/v1/chat/completions'))) {
+    console.error(`405 Error: Methode ${requestMethod} nicht erlaubt für Pfad ${requestPath}`);
+    return res.status(405).json({
+      choices: [{
+        message: {
+          content: `ERROR: Method ${requestMethod} not allowed for this endpoint. Please use POST.`
+        }
+      }]
+    });
+  }
+  
+  next();
+});
+
+// Füge spezielle Handler für Pfade hinzu, um PUT/PATCH zu akzeptieren, falls Janitor diese verwendet
+// Dies ist ein Fallback für den Fall, dass Janitor unerwartete Methoden sendet
+app.put('/free', (req, res) => {
+  console.log('PUT-Anfrage für /free umgeleitet zu POST');
+  handleProxyRequestWithModel(req, res, "google/gemini-2.5-pro-exp-03-25:free");
+});
+
+app.put('/cash', (req, res) => {
+  console.log('PUT-Anfrage für /cash umgeleitet zu POST');
+  handleProxyRequestWithModel(req, res, "google/gemini-2.5-pro-preview-03-25");
+});
+
+app.put('/nofilter', (req, res) => {
+  console.log('PUT-Anfrage für /nofilter umgeleitet zu POST');
+  handleProxyRequest(req, res);
+});
+
+app.put('/v1/chat/completions', (req, res) => {
+  console.log('PUT-Anfrage für /v1/chat/completions umgeleitet zu POST');
+  handleProxyRequest(req, res);
 });
 
 // Starte den Express-Server
