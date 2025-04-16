@@ -523,7 +523,6 @@ async function handleProxyRequestWithModel(req, res, forceModel = null, useJailb
       });
     } else if (error.response?.status === 403 || 
                error.message?.includes('PROHIBITED_CONTENT') ||
-               error.message?.includes('pgshag2') || 
                error.message?.includes('No response from bot')) {
       // Content-Filter Fehler
       return res.status(200).json({
@@ -531,6 +530,18 @@ async function handleProxyRequestWithModel(req, res, forceModel = null, useJailb
           {
             message: {
               content: "Unfortunately, Gemini is being difficult and finds your content too 'extreme'. Use the Jailbreaked Version /jbfree or /jbcash for NSWF/Violence."
+            }
+          }
+        ]
+      });
+    } else if (error.message?.includes('pgshag2')) {
+      // pgshag2 error - This is likely the 404 error from OpenRouter for the experimental model
+      console.log("Detected pgshag2 error - likely the free model credit requirement");
+      return res.status(200).json({
+        choices: [
+          {
+            message: {
+              content: "ERROR: OpenRouter has limited access to the free experimental Gemini model. To use it, you need to have purchased at least 10 credits from OpenRouter. Please consider using the paid version by typing /cash instead of /free, or add your own API keys in OpenRouter settings."
             }
           }
         ]
@@ -547,7 +558,7 @@ async function handleProxyRequestWithModel(req, res, forceModel = null, useJailb
           choices: [
             {
               message: {
-                content: "ERROR: Fucking OpenRouter has limited access to the free experimental Gemini model. To use it, you need to have purchased at least 10 credits from OpenRouter. Please consider using the paid version by typing /cash instead of /free, or add your own API keys in OpenRouter settings."
+                content: "ERROR: FUCKING OpenRouter has limited access to the free experimental Gemini model. To use it, you need to have purchased at least 10 credits from OpenRouter. Please consider using the paid version by typing /cash instead of /free, or add your own API keys in OpenRouter settings."
               }
             }
           ]
