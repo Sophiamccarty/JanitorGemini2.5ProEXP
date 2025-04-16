@@ -503,17 +503,14 @@ async function handleProxyRequestWithModel(req, res, forceModel = null, useJailb
     // Extrahiere Fehlermeldung
     let errorMessage = "Unknown error";
     
-    // IMPORTANT: Specific handling for the free model 404 error that appears as pgshag2 in Janitor
-    if ((error.response?.status === 404 && forceModel === "google/gemini-2.5-pro-exp-03-25:free") ||
-         error.message?.includes('pgshag2')) {
-      console.log("Detected free model 404 error / pgshag2 error - Credit requirement issue");
-      
-      // Set a very specific error format that will be displayed directly in Janitor
+    // Wichtig! Prüfe zu Beginn auf 404 Fehler für das kostenlose Modell
+    if (error.response?.status === 404) {
+      console.log("404 Fehler erkannt - wahrscheinlich freies Modell nicht verfügbar");
       return res.status(200).json({
         choices: [
           {
             message: {
-              content: "IMPORTANT: FUCKIN OpenRouter now requires users to purchase at least 10 credits to use the free experimental model. Please type /cash to use the paid version instead, or purchase credits on OpenRouter.ai. YEAH IM CRYING TOO!"
+              content: "FUCKING OpenRouter has restricted access to the free experimental model. You now need to purchase at least FUCKING 10 credits to use it. Please type /cash to use the paid version instead, or purchase FUCKING credits on OpenRouter.ai. YEAH I CRY TOO!"
             }
           }
         ]
