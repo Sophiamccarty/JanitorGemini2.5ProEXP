@@ -1,20 +1,4 @@
-// ================== CATCH-ALL ROUTE ==================
-
-// Catch-All Route für alle anderen Pfade - um 404-Fehler besser zu handhaben
-app.all('*', (req, res) => {
-  console.log(`Unbekannte Route angefragt: ${req.method} ${req.path}`);
-  
-  // HEAD-Anfragen mit 200 OK beantworten, um 405-Fehler zu vermeiden
-  if (req.method === 'HEAD') {
-    return res.status(200).end();
-  }
-  
-  // Für alle anderen Methoden eine benutzerfreundliche Antwort senden
-  res.status(404).json({
-    status: 'error',
-    message: `Route ${req.path} not found. Available endpoints: /, /health, /free, /cash, /nofilter, /v1/chat/completions`
-  });
-});const express = require('express');
+const express = require('express');
 const axios = require('axios');
 const cors = require('cors');
 const http = require('http');
@@ -23,34 +7,23 @@ const https = require('https');
 // Erzeuge eine Express-App
 const app = express();
 
-// ================== MIDDLEWARE REIHENFOLGE OPTIMIERT ==================
-
-// SCHRITT 1: Basis-CORS mit maximaler Offenheit, um Preflight zu verhindern
+// 1) CORS erlauben (wichtig für Browser-Anfragen) mit erweiterter Konfiguration
 app.use(cors({
   origin: '*',
-  methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS', 'PATCH', 'HEAD'],
-  allowedHeaders: ['Content-Type', 'Authorization', 'X-API-Key', '*'],
-  credentials: true,
-  maxAge: 86400  // 24 Stunden CORS-Cache, um Preflight-Anfragen zu reduzieren
+  methods: ['GET', 'POST', 'OPTIONS', 'PUT', 'PATCH', 'DELETE'],
+  allowedHeaders: ['Content-Type', 'Authorization', 'X-API-Key']
 }));
 
-// SCHRITT 2: OPTIONS wird sofort beantwortet, ohne weitere Middleware zu durchlaufen
-app.options('*', (req, res) => {
-  res.status(200).end();
-});
+// OPTIONS-Anfragen für CORS Preflight explizit erlauben
+app.options('*', cors());
 
-// SCHRITT 3: Request-Logging ohne Blockierung
-app.use((req, res, next) => {
-  console.log(`Eingehende Anfrage: ${req.method} ${req.path} (${new Date().toISOString()})`);
-  next();
-});
-
-// SCHRITT 4: JSON-Parser mit hohem Limit
+// 2) JSON mit erhöhtem Limit parsen, z. B. 100MB
 app.use(express.json({ limit: '100mb' }));
 
-// SCHRITT 5: Server-Timeout konfigurieren
+// 3) Server-Timeout konfigurieren
 app.use((req, res, next) => {
-  res.setTimeout(120000); // 2 Minuten Timeout
+  // 2 Minuten Timeout für Server-Antworten
+  res.setTimeout(120000);
   next();
 });
 
@@ -517,85 +490,83 @@ async function handleProxyRequest(req, res) {
   return handleProxyRequestWithModel(req, res);
 }
 
-// Methoden-Logger Middleware - VOR den Routen definieren
-app.use((req, res, next) => {
-  const requestMethod = req.method;
-  const requestPath = req.path;
-  console.log(`Eingehende Anfrage: ${requestMethod} ${requestPath}`);
-  next(); // Keine Methodenprüfung hier, nur Logging
-});
-
-// Gemeinsame Handler-Funktion für Anfragen unabhängig von der HTTP-Methode
-function handleRequest(req, res, modelOverride = null) {
-  const requestTimestamp = new Date().toISOString();
-  const endpoint = modelOverride ? 
-    (modelOverride.includes("free") ? "free" : "cash") : 
-    (req.path.includes("v1") ? "legacy" : "nofilter");
-  
-  console.log(`== Neue Anfrage über /${endpoint} (${requestTimestamp}) mit Methode ${req.method} ==`);
-  
-  // Je nach HTTP-Methode unterschiedlich verarbeiten
-  if (req.method === 'OPTIONS') {
-    // CORS preflight request beantworten
-    return res.status(200).end();
-  } else if (['GET', 'HEAD'].includes(req.method)) {
-    // GET und HEAD nicht für API-Endpunkte erlauben
-    return res.status(405).json({
-      choices: [{
-        message: {
-          content: `ERROR: Method ${req.method} is not allowed for this endpoint. Please use POST.`
-        }
-      }]
-    });
-  } else {
-    // POST, PUT, PATCH usw. alle gleich behandeln
-    return handleProxyRequestWithModel(req, res, modelOverride);
-  }
-}
-
+// Definiere zuerst alle Routen für verschiedene Methoden, bevor die Methoden-Überprüfung erfolgt
 // Route "/free" - Erzwingt das kostenlose Gemini-Modell
-app.all('/free', (req, res) => {
-  handleRequest(req, res, "google/gemini-2.5-pro-exp-03-25:free");
+app.all('/free', async (req, res) => {
+  const requestTimestamp = new Date().toISOString();
+  console.log(`== Neue Anfrage über /free (${requestTimestamp}) mit Methode ${req.method} ==`);
+  await handleProxyRequestWithModel(req, res, "google/gemini-2.5-pro-exp-03-25:free");
 });
 
 // Route "/cash" - Erzwingt das kostenpflichtige Gemini-Modell
-app.all('/cash', (req, res) => {
-  handleRequest(req, res, "google/gemini-2.5-pro-preview-03-25");
+app.all('/cash', async (req, res) => {
+  const requestTimestamp = new Date().toISOString();
+  console.log(`== Neue Anfrage über /cash (${requestTimestamp}) mit Methode ${req.method} ==`);
+  await handleProxyRequestWithModel(req, res, "google/gemini-2.5-pro-preview-03-25");
 });
 
 // Bestehende Proxy-Route "/nofilter" - Modell frei wählbar
-app.all('/nofilter', (req, res) => {
-  handleRequest(req, res);
+app.all('/nofilter', async (req, res) => {
+  const requestTimestamp = new Date().toISOString();
+  console.log(`== Neue Anfrage über /nofilter (${requestTimestamp}) mit Methode ${req.method} ==`);
+  await handleProxyRequest(req, res);
 });
 
 // Für Abwärtskompatibilität alte Route beibehalten - Modell frei wählbar
-app.all('/v1/chat/completions', (req, res) => {
-  handleRequest(req, res);
+app.all('/v1/chat/completions', async (req, res) => {
+  const requestTimestamp = new Date().toISOString();
+  console.log(`== Neue Anfrage über alte Route /v1/chat/completions (${requestTimestamp}) mit Methode ${req.method} ==`);
+  await handleProxyRequest(req, res);
 });
 
-// ================== ROOT-ROUTE VEREINFACHT ==================
+// ERST JETZT Methoden-Logging Middleware hinzufügen - nach den Routendefinitionen
+app.use((req, res, next) => {
+  const requestMethod = req.method;
+  const requestPath = req.path;
+  console.log(`Unbekannte Anfrage: ${requestMethod} ${requestPath}`);
+  
+  // Für unbekannte Routen 404 zurückgeben
+  if (!res.headersSent) {
+    return res.status(404).json({
+      choices: [{
+        message: {
+          content: `ERROR: Endpoint ${requestPath} not found. Available endpoints are /free, /cash, /nofilter and /v1/chat/completions.`
+        }
+      }]
+    });
+  }
+  
+  next();
+});
 
-// Root-Route: Einfache Statusinformationen (unterstützt ALLE Methoden)
-app.all('/', (req, res) => {
-  // Keine Methodenprüfung durchführen, alle Methoden akzeptieren
+// Einfache Statusroute aktualisieren mit neuen Endpunkten
+app.get('/', (req, res) => {
   res.json({
     status: 'online',
-    version: '1.5.2',
-    info: 'JanitorAI ↔️ OpenRouter Proxy',
+    version: '1.5.1',
+    info: 'JanitorAI ↔️ OpenRouter Proxy mit dynamischen Safety-Settings und Streaming-Support',
+    usage: 'Diesen Proxy mit JanitorAI verwenden - API-Key bei JanitorAI eingeben',
     endpoints: {
-      standard: '/nofilter',
-      legacy: '/v1/chat/completions',
-      free: '/free',
-      paid: '/cash'
+      standard: '/nofilter',          // Standard-Route ohne Modellzwang
+      legacy: '/v1/chat/completions', // Legacy-Route ohne Modellzwang
+      free: '/free',                  // Route mit kostenlosem Gemini-Modell
+      paid: '/cash'                   // Route mit kostenpflichtigem Gemini-Modell
+    },
+    features: {
+      streaming: 'Aktiviert',
+      dynamicSafety: 'Optimiert für google/gemini-2.5-pro-preview-03-25 und google/gemini-2.5-pro-exp-03-25:free (beide mit OFF-Setting)',
+      diagnostics: 'Erweiterte Fehlerdiagnose aktiv',
+      methods: 'Unterstützt GET, POST, PUT, PATCH, DELETE für alle Endpoints'
     }
   });
 });
 
-// Health-Route: Status-Check (unterstützt ALLE Methoden)
-app.all('/health', (req, res) => {
+// Health-Check Endpoint für Monitoring
+app.get('/health', (req, res) => {
   res.json({
     status: 'healthy',
     uptime: process.uptime(),
+    memory: process.memoryUsage(),
     timestamp: new Date().toISOString()
   });
 });
