@@ -66,9 +66,8 @@ function getSafetySettings(modelName) {
     'gemini-1.5-pro-001', 'gemini-1.5-flash-001',
     'gemini-1.5-flash-8b-exp-0827', 'gemini-1.5-flash-8b-exp-0924',
     'gemini-pro', 'gemini-1.0-pro', 'gemini-1.0-pro-001',
-    'gemma-3-27b-it',
-    // Wichtig: Füge die Free-Version von 2.5 Pro hinzu
-    'gemini-2.5-pro-exp-03-25:free'
+    'gemma-3-27b-it'
+    // Free-Version wurde entfernt, da wir nun OFF versuchen
   ];
 
   // Gemini 2.0 flash unterstützt "OFF" für alle Kategorien
@@ -76,7 +75,8 @@ function getSafetySettings(modelName) {
   const modelOffList = [
     'gemini-2.0-flash', 'gemini-2.0-flash-001',
     'gemini-2.0-flash-exp', 'gemini-2.0-flash-exp-image-generation',
-    'gemini-2.5-pro-preview-03-25'
+    'gemini-2.5-pro-preview-03-25',
+    'gemini-2.5-pro-exp-03-25:free'  // Füge die Free-Version auch für OFF-Versuch hinzu
   ];
 
   // Exakte Modellprüfung für unsere speziellen Modelle
@@ -88,11 +88,11 @@ function getSafetySettings(modelName) {
     console.log('Gemini 2.5 Pro Preview erkannt: Verwende OFF für alle Safety-Einstellungen');
   } 
   else if (modelName === 'google/gemini-2.5-pro-exp-03-25:free') {
-    // Für die Free-Version müssen wir BLOCK_NONE verwenden
+    // Für die Free-Version versuchen wir zuerst OFF
     safetySettings.forEach(setting => {
-      setting.threshold = 'BLOCK_NONE';
+      setting.threshold = 'OFF';
     });
-    console.log('Gemini 2.5 Pro Free erkannt: Verwende BLOCK_NONE für alle Safety-Einstellungen');
+    console.log('Gemini 2.5 Pro Free erkannt: Verwende OFF für alle Safety-Einstellungen (experimentell)');
   }
   // Fallback auf Modell-Listen-Prüfung für andere Modelle
   else if (modelBlockNoneList.some(model => modelName.includes(model))) {
@@ -460,7 +460,7 @@ app.get('/', (req, res) => {
     },
     features: {
       streaming: 'Aktiviert',
-      dynamicSafety: 'Optimiert für google/gemini-2.5-pro-preview-03-25 und google/gemini-2.5-pro-exp-03-25:free'
+      dynamicSafety: 'Optimiert für google/gemini-2.5-pro-preview-03-25 und google/gemini-2.5-pro-exp-03-25:free (beide mit OFF-Setting)'
     }
   });
 });
