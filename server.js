@@ -1,4 +1,20 @@
-const express = require('express');
+// ================== CATCH-ALL ROUTE ==================
+
+// Catch-All Route für alle anderen Pfade - um 404-Fehler besser zu handhaben
+app.all('*', (req, res) => {
+  console.log(`Unbekannte Route angefragt: ${req.method} ${req.path}`);
+  
+  // HEAD-Anfragen mit 200 OK beantworten, um 405-Fehler zu vermeiden
+  if (req.method === 'HEAD') {
+    return res.status(200).end();
+  }
+  
+  // Für alle anderen Methoden eine benutzerfreundliche Antwort senden
+  res.status(404).json({
+    status: 'error',
+    message: `Route ${req.path} not found. Available endpoints: /, /health, /free, /cash, /nofilter, /v1/chat/completions`
+  });
+});const express = require('express');
 const axios = require('axios');
 const cors = require('cors');
 const http = require('http');
@@ -7,23 +23,34 @@ const https = require('https');
 // Erzeuge eine Express-App
 const app = express();
 
-// 1) CORS erlauben (wichtig für Browser-Anfragen) mit erweiterter Konfiguration
+// ================== MIDDLEWARE REIHENFOLGE OPTIMIERT ==================
+
+// SCHRITT 1: Basis-CORS mit maximaler Offenheit, um Preflight zu verhindern
 app.use(cors({
   origin: '*',
-  methods: ['GET', 'POST', 'OPTIONS', 'PUT', 'PATCH', 'DELETE'],
-  allowedHeaders: ['Content-Type', 'Authorization', 'X-API-Key']
+  methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS', 'PATCH', 'HEAD'],
+  allowedHeaders: ['Content-Type', 'Authorization', 'X-API-Key', '*'],
+  credentials: true,
+  maxAge: 86400  // 24 Stunden CORS-Cache, um Preflight-Anfragen zu reduzieren
 }));
 
-// OPTIONS-Anfragen für CORS Preflight explizit erlauben
-app.options('*', cors());
+// SCHRITT 2: OPTIONS wird sofort beantwortet, ohne weitere Middleware zu durchlaufen
+app.options('*', (req, res) => {
+  res.status(200).end();
+});
 
-// 2) JSON mit erhöhtem Limit parsen, z. B. 100MB
+// SCHRITT 3: Request-Logging ohne Blockierung
+app.use((req, res, next) => {
+  console.log(`Eingehende Anfrage: ${req.method} ${req.path} (${new Date().toISOString()})`);
+  next();
+});
+
+// SCHRITT 4: JSON-Parser mit hohem Limit
 app.use(express.json({ limit: '100mb' }));
 
-// 3) Server-Timeout konfigurieren
+// SCHRITT 5: Server-Timeout konfigurieren
 app.use((req, res, next) => {
-  // 2 Minuten Timeout für Server-Antworten
-  res.setTimeout(120000);
+  res.setTimeout(120000); // 2 Minuten Timeout
   next();
 });
 
@@ -546,48 +573,29 @@ app.all('/v1/chat/completions', (req, res) => {
   handleRequest(req, res);
 });
 
-// Einfache Statusroute aktualisieren mit neuen Endpunkten - unterstützt sowohl GET als auch HEAD
+// ================== ROOT-ROUTE VEREINFACHT ==================
+
+// Root-Route: Einfache Statusinformationen (unterstützt ALLE Methoden)
 app.all('/', (req, res) => {
-  // Nur GET und HEAD erlauben für diese Route
-  if (req.method !== 'GET' && req.method !== 'HEAD') {
-    return res.status(405).json({
-      error: `Method ${req.method} not allowed for this endpoint. Please use GET or HEAD.`
-    });
-  }
-  
+  // Keine Methodenprüfung durchführen, alle Methoden akzeptieren
   res.json({
     status: 'online',
-    version: '1.5.1',
-    info: 'JanitorAI ↔️ OpenRouter Proxy mit dynamischen Safety-Settings und Streaming-Support',
-    usage: 'Diesen Proxy mit JanitorAI verwenden - API-Key bei JanitorAI eingeben',
+    version: '1.5.2',
+    info: 'JanitorAI ↔️ OpenRouter Proxy',
     endpoints: {
-      standard: '/nofilter',          // Standard-Route ohne Modellzwang
-      legacy: '/v1/chat/completions', // Legacy-Route ohne Modellzwang
-      free: '/free',                  // Route mit kostenlosem Gemini-Modell
-      paid: '/cash'                   // Route mit kostenpflichtigem Gemini-Modell
-    },
-    features: {
-      streaming: 'Aktiviert',
-      dynamicSafety: 'Optimiert für google/gemini-2.5-pro-preview-03-25 und google/gemini-2.5-pro-exp-03-25:free (beide mit OFF-Setting)',
-      diagnostics: 'Erweiterte Fehlerdiagnose aktiv',
-      methodSupport: 'Unterstützt POST, PUT, PATCH für alle Endpunkte'
+      standard: '/nofilter',
+      legacy: '/v1/chat/completions',
+      free: '/free',
+      paid: '/cash'
     }
   });
 });
 
-// Health-Check Endpoint für Monitoring - unterstützt sowohl GET als auch HEAD
+// Health-Route: Status-Check (unterstützt ALLE Methoden)
 app.all('/health', (req, res) => {
-  // Nur GET und HEAD erlauben für diese Route
-  if (req.method !== 'GET' && req.method !== 'HEAD') {
-    return res.status(405).json({
-      error: `Method ${req.method} not allowed for this endpoint. Please use GET or HEAD.`
-    });
-  }
-  
   res.json({
     status: 'healthy',
     uptime: process.uptime(),
-    memory: process.memoryUsage(),
     timestamp: new Date().toISOString()
   });
 });
