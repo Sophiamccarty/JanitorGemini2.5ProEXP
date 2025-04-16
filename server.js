@@ -546,8 +546,15 @@ app.all('/v1/chat/completions', (req, res) => {
   handleRequest(req, res);
 });
 
-// Einfache Statusroute aktualisieren mit neuen Endpunkten
-app.get('/', (req, res) => {
+// Einfache Statusroute aktualisieren mit neuen Endpunkten - unterstützt sowohl GET als auch HEAD
+app.all('/', (req, res) => {
+  // Nur GET und HEAD erlauben für diese Route
+  if (req.method !== 'GET' && req.method !== 'HEAD') {
+    return res.status(405).json({
+      error: `Method ${req.method} not allowed for this endpoint. Please use GET or HEAD.`
+    });
+  }
+  
   res.json({
     status: 'online',
     version: '1.5.1',
@@ -568,8 +575,15 @@ app.get('/', (req, res) => {
   });
 });
 
-// Health-Check Endpoint für Monitoring
-app.get('/health', (req, res) => {
+// Health-Check Endpoint für Monitoring - unterstützt sowohl GET als auch HEAD
+app.all('/health', (req, res) => {
+  // Nur GET und HEAD erlauben für diese Route
+  if (req.method !== 'GET' && req.method !== 'HEAD') {
+    return res.status(405).json({
+      error: `Method ${req.method} not allowed for this endpoint. Please use GET or HEAD.`
+    });
+  }
+  
   res.json({
     status: 'healthy',
     uptime: process.uptime(),
