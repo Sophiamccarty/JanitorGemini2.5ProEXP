@@ -442,7 +442,7 @@ async function handleProxyRequestWithModel(req, res, forceModel = null, useJailb
       return res.status(200).json({
         choices: [{
           message: {
-            content: "Unfortunately, Gemini is being difficult and finds your content too 'extreme'. The paid version 'Gemini 2.5 Pro Preview' works without problems for NSFW/Violence content."
+            content: "Unfortunately, Gemini is being difficult and finds your content too 'extreme'. Use the Jailbreaked Version /jbfree or /jbcash for NSWF/Violence."
           }
         }]
       });
@@ -530,7 +530,7 @@ async function handleProxyRequestWithModel(req, res, forceModel = null, useJailb
         choices: [
           {
             message: {
-              content: "Unfortunately, Gemini is being difficult and finds your content too 'extreme'. The paid version 'Gemini 2.5 Pro Preview' works without problems for NSFW/Violence content."
+              content: "Unfortunately, Gemini is being difficult and finds your content too 'extreme'. Use the Jailbreaked Version /jbfree or /jbcash for NSWF/Violence."
             }
           }
         ]
