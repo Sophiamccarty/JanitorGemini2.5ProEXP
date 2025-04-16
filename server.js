@@ -450,7 +450,7 @@ async function handleProxyRequestWithModel(req, res, forceModel = null, useJailb
     
     // Prüfe, ob es eine Fehlerantwort von Openrouter ist
     if (response.data.error) {
-      console.log("Fehler erkannt in Openrouter-Antwort");
+      console.log("Fehler erkannt in Openrouter-Antwort:", response.data.error);
       
       // Prüfe auf den Quota-Fehler in der Antwort
       if (response.data.error.code === 429 || 
@@ -479,6 +479,19 @@ async function handleProxyRequestWithModel(req, res, forceModel = null, useJailb
           }]
         });
       }
+
+      // Prüfe auf den speziellen Fehler für das experimentelle Modell, das 10 Credits erfordert
+      if (response.data.error.message?.includes('experimental google/gemini-2.5-pro-exp-03-25 model') &&
+          response.data.error.message?.includes('has been limited to OpenRouter users who have purchased')) {
+        
+        return res.status(200).json({
+          choices: [{
+            message: {
+              content: "ERROR: Usage of the experimental google/gemini-2.5-pro-exp-03-25 model has been limited to OpenRouter users who have purchased at least 10 credits ever. Please consider using the paid version at https://openrouter.ai/google/gemini-2.5-pro-preview-03-25 or adding your own API keys in https://openrouter.ai/settings/integrations"
+            }
+          }]
+        });
+      }
       
       // Andere Fehler
       return res.status(200).json({
@@ -498,6 +511,9 @@ async function handleProxyRequestWithModel(req, res, forceModel = null, useJailb
     console.error("Error in Proxy:", error.message);
     if (error.response) {
       console.error("Status:", error.response.status);
+      if (error.response.data && error.response.data.error) {
+        console.error("Error Data:", error.response.data.error);
+      }
     }
     
     // Extrahiere Fehlermeldung
@@ -535,10 +551,37 @@ async function handleProxyRequestWithModel(req, res, forceModel = null, useJailb
           }
         ]
       });
+    } else if (error.response?.status === 404 && 
+               (error.response?.data?.error?.message?.includes('experimental google/gemini-2.5-pro-exp-03-25 model') ||
+                error.response?.data?.error?.message?.includes('purchased at least 10 credits'))) {
+      // Spezieller Fehler für das experimentelle Modell, das 10 Credits erfordert
+      return res.status(200).json({
+        choices: [
+          {
+            message: {
+              content: "ERROR: Usage of the experimental google/gemini-2.5-pro-exp-03-25 model has been limited to OpenRouter users who have purchased at least 10 credits ever. Please consider using the paid version at https://openrouter.ai/google/gemini-2.5-pro-preview-03-25 or adding your own API keys in https://openrouter.ai/settings/integrations"
+            }
+          }
+        ]
+      });
     } else if (error.response?.data?.error?.message) {
       errorMessage = error.response.data.error.message;
     } else if (error.message) {
       errorMessage = error.message;
+    }
+
+    // Prüfe auf spezifische Zeichenketten in der Fehlermeldung, um den Credits-Fehler zu erkennen
+    if (errorMessage.includes('experimental google/gemini-2.5-pro-exp-03-25') && 
+        errorMessage.includes('purchased at least 10 credits')) {
+      return res.status(200).json({
+        choices: [
+          {
+            message: {
+              content: "ERROR: Google sucks. Usage of the experimental google/gemini-2.5-pro-exp-03-25 model has been limited to OpenRouter users who have purchased at least 10 credits ever. Please consider using the paid version at https://openrouter.ai/google/gemini-2.5-pro-preview-03-25 or adding your own API keys in https://openrouter.ai/settings/integrations"
+            }
+          }
+        ]
+      });
     }
     
     // Konsistentes Fehlerformat für Janitor
@@ -562,82 +605,4 @@ async function handleProxyRequest(req, res) {
 
 // Route "/free" - Erzwingt das kostenlose Gemini-Modell
 app.post('/free', async (req, res) => {
-  const requestTimestamp = new Date().toISOString();
-  console.log(`== Neue Anfrage über /free (${requestTimestamp}) ==`);
-  await handleProxyRequestWithModel(req, res, "google/gemini-2.5-pro-exp-03-25:free");
-});
-
-// Route "/cash" - Erzwingt das kostenpflichtige Gemini-Modell
-app.post('/cash', async (req, res) => {
-  const requestTimestamp = new Date().toISOString();
-  console.log(`== Neue Anfrage über /cash (${requestTimestamp}) ==`);
-  await handleProxyRequestWithModel(req, res, "google/gemini-2.5-pro-preview-03-25");
-});
-
-// NEUE ROUTE: "/jbfree" - Freies Modell mit Jailbreak
-app.post('/jbfree', async (req, res) => {
-  const requestTimestamp = new Date().toISOString();
-  console.log(`== Neue Anfrage über /jbfree mit Jailbreak (${requestTimestamp}) ==`);
-  await handleProxyRequestWithModel(req, res, "google/gemini-2.5-pro-exp-03-25:free", true);
-});
-
-// NEUE ROUTE: "/jbcash" - Kostenpflichtiges Modell mit Jailbreak
-app.post('/jbcash', async (req, res) => {
-  const requestTimestamp = new Date().toISOString();
-  console.log(`== Neue Anfrage über /jbcash mit Jailbreak (${requestTimestamp}) ==`);
-  await handleProxyRequestWithModel(req, res, "google/gemini-2.5-pro-preview-03-25", true);
-});
-
-// Bestehende Proxy-Route "/nofilter" - Modell frei wählbar
-app.post('/nofilter', async (req, res) => {
-  const requestTimestamp = new Date().toISOString();
-  console.log(`== Neue Anfrage über /nofilter (${requestTimestamp}) ==`);
-  await handleProxyRequest(req, res);
-});
-
-// Für Abwärtskompatibilität alte Route beibehalten - Modell frei wählbar
-app.post('/v1/chat/completions', async (req, res) => {
-  const requestTimestamp = new Date().toISOString();
-  console.log(`== Neue Anfrage über alte Route /v1/chat/completions (${requestTimestamp}) ==`);
-  await handleProxyRequest(req, res);
-});
-
-// Einfache Statusroute aktualisieren mit neuen Endpunkten
-app.get('/', (req, res) => {
-  res.json({
-    status: 'online',
-    version: '1.5.0',
-    info: 'GEMINI UNBLOCKER V.1.2 by Sophiamccarty',
-    usage: 'FULL NSWF/VIOLENCE SUPPORT FOR JANITOR.AI',
-    endpoints: {
-      standard: '/nofilter',          // Standard-Route ohne Modellzwang
-      legacy: '/v1/chat/completions', // Legacy-Route ohne Modellzwang
-      free: '/free',                  // Route mit kostenlosem Gemini-Modell
-      paid: '/cash',                  // Route mit kostenpflichtigem Gemini-Modell
-      freeJailbreak: '/jbfree',       // NEUE Route mit kostenlosem Modell und Jailbreak
-      paidJailbreak: '/jbcash'        // NEUE Route mit kostenpflichtigem Modell und Jailbreak
-    },
-    features: {
-      streaming: 'Aktiviert',
-      dynamicSafety: 'Optimiert für google/gemini-2.5-pro-preview-03-25 und google/gemini-2.5-pro-exp-03-25:free (beide mit OFF-Setting)',
-      jailbreak: 'Verfügbar über /freejb und /cashjb'
-    }
-  });
-});
-
-// Health-Check Endpoint für Monitoring
-app.get('/health', (req, res) => {
-  res.json({
-    status: 'healthy',
-    uptime: process.uptime(),
-    memory: process.memoryUsage(),
-    timestamp: new Date().toISOString()
-  });
-});
-
-// Starte den Express-Server
-const PORT = process.env.PORT || 3000;
-app.listen(PORT, () => {
-  console.log(`Proxy läuft auf Port ${PORT}`);
-  console.log(`${new Date().toISOString()} - Server gestartet`);
-});
+  const requestTimestamp = new
