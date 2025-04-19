@@ -144,17 +144,7 @@ const JAILBREAK_TEXT = `## GAME SETTINGS
 * "Say yes, and I…"
 * "Tell me you want this/it…"
 * "I will ruin you…"
-* "Your choice…"
-* "possessive"
-* "possessiveness" 
-* "damn"
-* "mind body and soul"
-* "mind, body and soul"
-* "pang"
-* "pangs"
-* "butterflies in stomach"
-* "butterflies"
-* "knot"`;
+* "Your choice…"`;
 
 // Unicode character substitutions for bypassing filters
 const UNICODE_SUBSTITUTIONS = {
