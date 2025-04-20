@@ -109,6 +109,7 @@ const JAILBREAK_TEXT = `## GAME SETTINGS
 * {Performing Actions for {{user}}=off}
 (While you may perform actions concerning {{user}}'s condition (illness, pregnancy, miscarriage, natural death, etc.), you must never perform actions or speak on behalf of {{user}}.)
 * {Logic=on}
+* {Markdown=on} (You will always use markdown: * for actions like *this*; " for direct speech “like this”; ' for thoughts ‘like this’)
 
 ---
 
