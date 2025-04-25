@@ -2153,7 +2153,7 @@ async function handleProxyRequestWithModel(req, res, forceModel = null, useJailb
       
     } catch (err) {
       console.error("Fehler in Safety-Einstellungen oder Request-Verarbeitung:", err.message);
-      return res.status(500).json({ error: { message: "Interner Serverfehler bei der Anfrageverarbeitung." }});
+      return res.status(500).json({ error: { message: "Sorry you have to read this: FUCKING OpenRouter is limiting free models to one request per minute (errors count too)! I recommend switching to Flash 2.5 or the paid version until things calm down." }});
     }
 
   } catch (error) {
