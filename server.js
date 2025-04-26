@@ -13,7 +13,7 @@ const { PassThrough } = require('stream');
 const GEMINI_25_FLASH_PREVIEW = 'google/gemini-2.5-flash-preview';
 const GEMINI_25_FLASH_THINKING = 'google/gemini-2.5-flash-preview:thinking';
 const GEMINI_25_PRO_PREVIEW = 'google/gemini-2.5-pro-preview-03-25';
-const GEMINI_25_PRO_FREE = 'google/gemini-2.5-pro-exp-03-25:free';
+const GEMINI_25_PRO_FREE = 'google/gemini-2.5-pro-exp-03-25';
 
 // Initialize Express app
 const app = express();
@@ -2228,7 +2228,7 @@ async function handleProxyRequestWithModel(req, res, forceModel = null, useJailb
 
 // "/free" - Free Gemini 2.5 Pro
 app.post('/free', async (req, res) => {
-  await handleProxyRequestWithModel(req, res, "google/gemini-2.5-pro-exp-03-25:free");
+  await handleProxyRequestWithModel(req, res, "google/gemini-2.5-pro-exp-03-25");
 });
 
 // "/cash" - Paid Gemini 2.5 Pro 
@@ -2238,7 +2238,7 @@ app.post('/cash', async (req, res) => {
 
 // "/jbfree" - Free model with jailbreak
 app.post('/jbfree', async (req, res) => {
-  await handleProxyRequestWithModel(req, res, "google/gemini-2.5-pro-exp-03-25:free", true);
+  await handleProxyRequestWithModel(req, res, "google/gemini-2.5-pro-exp-03-25", true);
 });
 
 // "/jbcash" - Paid model with jailbreak
