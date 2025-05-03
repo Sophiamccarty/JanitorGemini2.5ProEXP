@@ -2662,6 +2662,15 @@ function shouldTriggerAutoplot() {
  * Bereinigt den Antworttext von unerwünschten Mustern
  */
 function cleanResponseText(text) {
+  // Remove specific AI snippet from Janitor responses
+  // Regex to match the exact phrase, allowing for minor variations in whitespace/newlines
+  const aiSnippetRegex = /\{\{char\}\}\s+will\s+strictly\s+NEVER\s+speak\s+for\s+\{\{user\}\}\s+or\s+describe\s+actions\s+as\s+\{\{user\}\}\s+and\s+will\s+allow\s+\{\{user\}\}\s+to\s+dictate\s+their\s+own\s+actions\.\s*\{\{char\}\}\s+will\s+speak,\s+roleplay,\s+and\s+write\s+in\s+third-person\s+view\.\s*Each\s+reply\s+from\s+\{\{char\}\}\s+will\s+be\s+different,\s+and\s+\{\{char\}\}\s+will\s+not\s+repeat\s+similar\s+replies\.\s*I\s+will\s+never\s+play,\s+control\s+or\s+dictate\s+\{\{user\}\}\'s\s+actions,\s+thoughts,\s+or\s+feelings\./gi;
+  text = text.replace(aiSnippetRegex, '');
+
+  // Remove specific {{char}} and {{user}} patterns
+  const charUserPatterns = /\{\{(char|user)\}\}(\.|\:)?/gi;
+  text = text.replace(charUserPatterns, '');
+
   // Entferne "as the user had noted" vom Ende der Antwort
   text = text.replace(/,?\s*as the user had noted\.?$/i, '');
 
