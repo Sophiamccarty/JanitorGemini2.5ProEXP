@@ -3,16 +3,16 @@ const cors = require('cors');
 const app = express();
 const port = process.env.PORT || 3000;
 
-// Increase payload size limits - setting to 50MB which should be more than enough
+// Increase payload size limits
 app.use(express.json({ limit: '50mb' }));
 app.use(express.urlencoded({ limit: '50mb', extended: true }));
-app.use(express.text({ limit: '50mb' }));
 
-// Enable CORS with more permissive settings
+// Enable CORS with very permissive settings
 app.use(cors({
   origin: '*',
-  methods: ['GET', 'POST', 'OPTIONS'],
-  allowedHeaders: ['Content-Type', 'Authorization', 'X-Requested-With', 'Accept']
+  methods: ['GET', 'POST', 'OPTIONS', 'HEAD'],
+  allowedHeaders: '*',
+  exposedHeaders: ['Content-Type', 'Authorization']
 }));
 
 // The message in English with formatted links and code blocks
@@ -41,7 +41,7 @@ Then you can continue directly with this Proxy-URL:
 Your model is now selected directly in the Janitor model-field or via OpenRouter itself.
 Quick Models: *google/gemini-2.5-pro-preview* or *google/gemini-2.5-pro-exp-03-25*
 
-PS: Dont worry, your Commands & Settings stays the same.
+PS: DONT WORRY! YOUR COMMANDS & SETTINGS STAYS THE SAME.
 
 XoXo Sophia 😘`;
 
@@ -58,133 +58,130 @@ const routes = [
   '/nonjailbreak'
 ];
 
-// Raw body handling for streams and large payloads
-app.use((req, res, next) => {
-  if (req.headers['content-type'] === 'application/json') {
-    let data = '';
-    req.setEncoding('utf8');
-    req.on('data', chunk => {
-      data += chunk;
-    });
-    req.on('end', () => {
-      try {
-        if (data) {
-          req.rawBody = data;
-          req.body = JSON.parse(data);
-        }
-        next();
-      } catch (e) {
-        console.error('Error parsing JSON body:', e);
-        next();
-      }
-    });
-  } else {
-    next();
-  }
-});
-
-// Enhanced logging middleware with headers
+// Enhanced logging middleware
 app.use((req, res, next) => {
   console.log(`${new Date().toISOString()} - ${req.method} ${req.url}`);
   console.log('Headers:', JSON.stringify(req.headers));
-  if (req.body && Object.keys(req.body).length > 0) {
-    console.log('Body size:', req.rawBody ? req.rawBody.length : JSON.stringify(req.body).length);
-  }
   next();
 });
 
-// Set up each route
+// CRITICAL: Add an OpenAI-compatible route that Janitor might be using
+app.post('/v1/chat/completions', (req, res) => {
+  console.log('Received request to OpenAI-compatible endpoint');
+  handleChatRequest(req, res);
+});
+
+// Add a common handler function for all routes
+function handleChatRequest(req, res) {
+  // Pass through authorization headers
+  if (req.headers.authorization) {
+    res.setHeader('Authorization', req.headers.authorization);
+  }
+  
+  // Standard OpenAI response format
+  const responseObj = {
+    id: `chatcmpl-${Date.now()}`,
+    object: "chat.completion",
+    created: Math.floor(Date.now() / 1000),
+    model: "message-relay",
+  };
+  
+  // Handle stream parameter
+  const isStreamingRequest = req.body && req.body.stream === true;
+  
+  if (!isStreamingRequest) {
+    // Non-streaming response
+    console.log('Sending non-streaming response');
+    return res.status(200).json({
+      ...responseObj,
+      choices: [{
+        index: 0,
+        message: {
+          role: "assistant",
+          content: message
+        },
+        finish_reason: "stop"
+      }]
+    });
+  } else {
+    // Streaming response
+    console.log('Sending streaming response');
+    res.setHeader('Content-Type', 'text/event-stream');
+    res.setHeader('Cache-Control', 'no-cache');
+    res.setHeader('Connection', 'keep-alive');
+    res.flushHeaders();
+    
+    // Send the role first
+    res.write(`data: ${JSON.stringify({
+      ...responseObj,
+      choices: [{
+        index: 0,
+        delta: {
+          role: "assistant"
+        }
+      }]
+    })}\n\n`);
+    
+    // Send the content
+    res.write(`data: ${JSON.stringify({
+      ...responseObj,
+      choices: [{
+        index: 0,
+        delta: {
+          content: message
+        }
+      }]
+    })}\n\n`);
+    
+    // Send completion
+    res.write(`data: ${JSON.stringify({
+      ...responseObj,
+      choices: [{
+        index: 0,
+        delta: {},
+        finish_reason: "stop"
+      }]
+    })}\n\n`);
+    
+    res.write('data: [DONE]\n\n');
+    res.end();
+  }
+}
+
+// Set up each custom route to use the common handler
 routes.forEach(route => {
   app.post(route, (req, res) => {
     console.log(`Received request to ${route}`);
-    
-    // Pass through any authorization headers that might be present
-    if (req.headers.authorization) {
-      res.setHeader('Authorization', req.headers.authorization);
-    }
-    
-    // Add standard OpenAI API response fields that Janitor might expect
-    const responseObj = {
-      id: `chatcmpl-${Date.now()}`,
-      object: "chat.completion",
-      created: Math.floor(Date.now() / 1000),
-      model: "message-relay",
-    };
-    
-    // Handle stream parameter, defaulting to false if not present
-    const isStreamingRequest = req.body && req.body.stream === true;
-    
-    // Handle non-streaming requests
-    if (!isStreamingRequest) {
-      console.log('Sending non-streaming response');
-      return res.json({
-        ...responseObj,
-        choices: [{
-          index: 0,
-          message: {
-            role: "assistant",
-            content: message
-          },
-          finish_reason: "stop"
-        }]
-      });
-    } 
-    // Handle streaming requests
-    else {
-      console.log('Sending streaming response');
-      res.setHeader('Content-Type', 'text/event-stream');
-      res.setHeader('Cache-Control', 'no-cache');
-      res.setHeader('Connection', 'keep-alive');
-      res.flushHeaders();
-      
-      const data = {
-        ...responseObj,
-        choices: [{
-          index: 0,
-          delta: {
-            role: "assistant",
-            content: message
-          },
-          finish_reason: null
-        }]
-      };
-      
-      res.write(`data: ${JSON.stringify(data)}\n\n`);
-      
-      // Send a completion event
-      const completionData = {
-        ...responseObj,
-        choices: [{
-          index: 0,
-          delta: {},
-          finish_reason: "stop"
-        }]
-      };
-      
-      res.write(`data: ${JSON.stringify(completionData)}\n\n`);
-      res.write(`data: [DONE]\n\n`);
-      res.end();
-    }
+    handleChatRequest(req, res);
   });
 });
 
-// Add root route for Janitor health check
+// Root route for health checks
 app.get('/', (req, res) => {
-  res.status(200).json({ status: "ok" });
+  // Return a standard OpenAI-like response for the health check
+  res.status(200).json({ 
+    status: "ok",
+    message: "API is running and ready to accept requests"
+  });
 });
 
-// Keep the original health check endpoint
-app.get('/health', (req, res) => {
-  res.status(200).send('Server is running');
-});
-
-// Special route for handling OPTIONS requests (preflight)
+// Special route for CORS preflight requests
 app.options('*', cors());
 
-// Add a catch-all route for debugging
+// Catch all route
 app.use('*', (req, res) => {
-  console.log(`Received request to unknown route: ${req.originalUrl}`);
-  res.status(404).send('Not found');
+  console.log(`Request to unknown route: ${req.originalUrl} (Method: ${req.method})`);
+  // For POST requests to unknown routes, try to handle them as chat completions
+  if (req.method === 'POST') {
+    handleChatRequest(req, res);
+  } else {
+    res.status(404).json({ 
+      error: { 
+        message: "Not found",
+        status: 404
+      }
+    });
+  }
 });
 
 // Error handling middleware
@@ -192,7 +189,7 @@ app.use((err, req, res, next) => {
   console.error('Error:', err);
   res.status(500).json({
     error: {
-      message: 'An internal server error occurred',
+      message: 'Internal server error',
       status: 500
     }
   });
