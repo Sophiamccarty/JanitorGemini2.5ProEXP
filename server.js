@@ -3,11 +3,11 @@ const cors = require('cors');
 const app = express();
 const port = process.env.PORT || 3000;
 
-// Enable CORS with more permissive settings
+// Enable CORS for all requests
 app.use(cors({
   origin: '*',
-  methods: ['GET', 'POST', 'OPTIONS'],
-  allowedHeaders: ['Content-Type', 'Authorization', 'X-Requested-With', 'Accept']
+  methods: ['POST', 'OPTIONS'],
+  allowedHeaders: ['Content-Type', 'Authorization']
 }));
 
 // The message in English with formatted links and code blocks
@@ -47,10 +47,9 @@ const routes = [
 
 app.use(express.json());
 
-// Log all requests
+// Add logging middleware
 app.use((req, res, next) => {
   console.log(`${new Date().toISOString()} - ${req.method} ${req.url}`);
-  console.log('Headers:', JSON.stringify(req.headers));
   next();
 });
 
@@ -58,11 +57,6 @@ app.use((req, res, next) => {
 routes.forEach(route => {
   app.post(route, (req, res) => {
     console.log(`Received request to ${route}`, { body: req.body });
-    
-    // Pass through any authorization headers that might be present
-    if (req.headers.authorization) {
-      res.setHeader('Authorization', req.headers.authorization);
-    }
     
     // Handle non-streaming requests
     if (req.body.stream === false || !req.body.stream) {
@@ -98,11 +92,7 @@ routes.forEach(route => {
   });
 });
 
-// Add more specific Janitor health check
-app.get('/', (req, res) => {
-  res.status(200).json({ status: "ok" });
-});
-
+// Add a simple health check endpoint
 app.get('/health', (req, res) => {
   res.status(200).send('Server is running');
 });
