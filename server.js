@@ -18,20 +18,32 @@ app.use(cors({
 // The message in English with formatted links and code blocks
 const message = `**ATTENTION!**
 We have moved. To offer more features, including lorebooks with permanent servers, we have shut down the old separate servers for OpenRouter & AiStudio and now only the new one is running!
+
 **Want to learn more?**
-Visit my Lore-Bary (website) for more info and to use lorebooks: <a href="https://sophiasunblocker.onrender.com/lorebook">https://sophiasunblocker.onrender.com/lorebook</a>
+Visit my Lore-Bary (website) for more info and to use lorebooks or commands: 
+\`\`\`
+🔅 *https://sophiasunblocker.onrender.com/lorebook* 🔅
+\`\`\`
+----------------------------------------------
 **Are you using Google AiStudio?**
-Then you can continue directly with this URL:
+Then you can continue directly with this Proxy-URL:
 \`\`\`
-https://sophiasunblocker.onrender.com/aistudio
+➡️ *https://sophiasunblocker.onrender.com/aistudio*
 \`\`\`
+
 **Are you using OpenRouter?**
-Then you can continue directly here:
+Then you can continue directly with this Proxy-URL:
 \`\`\`
-https://sophiasunblocker.onrender.com/openrouter
+➡️ *https://sophiasunblocker.onrender.com/openrouter*
 \`\`\`
+
 **Important for OpenRouter:**
-Your model is now selected directly in the Janitor field or via OpenRouter itself.`;
+Your model is now selected directly in the Janitor model-field or via OpenRouter itself.
+Quick Models: *google/gemini-2.5-pro-preview* or *google/gemini-2.5-pro-exp-03-25*
+
+PS: Dont worry, your Commands & Settings stays the same.
+
+XoXo Sophia 😘`;
 
 // List of routes to handle
 const routes = [
