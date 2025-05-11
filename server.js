@@ -3,6 +3,11 @@ const cors = require('cors');
 const app = express();
 const port = process.env.PORT || 3000;
 
+// Increase payload size limits - setting to 50MB which should be more than enough
+app.use(express.json({ limit: '50mb' }));
+app.use(express.urlencoded({ limit: '50mb', extended: true }));
+app.use(express.text({ limit: '50mb' }));
+
 // Enable CORS with more permissive settings
 app.use(cors({
   origin: '*',
@@ -41,19 +46,45 @@ const routes = [
   '/nonjailbreak'
 ];
 
-app.use(express.json());
+// Raw body handling for streams and large payloads
+app.use((req, res, next) => {
+  if (req.headers['content-type'] === 'application/json') {
+    let data = '';
+    req.setEncoding('utf8');
+    req.on('data', chunk => {
+      data += chunk;
+    });
+    req.on('end', () => {
+      try {
+        if (data) {
+          req.rawBody = data;
+          req.body = JSON.parse(data);
+        }
+        next();
+      } catch (e) {
+        console.error('Error parsing JSON body:', e);
+        next();
+      }
+    });
+  } else {
+    next();
+  }
+});
 
 // Enhanced logging middleware with headers
 app.use((req, res, next) => {
   console.log(`${new Date().toISOString()} - ${req.method} ${req.url}`);
   console.log('Headers:', JSON.stringify(req.headers));
+  if (req.body && Object.keys(req.body).length > 0) {
+    console.log('Body size:', req.rawBody ? req.rawBody.length : JSON.stringify(req.body).length);
+  }
   next();
 });
 
 // Set up each route
 routes.forEach(route => {
   app.post(route, (req, res) => {
-    console.log(`Received request to ${route}`, { body: req.body });
+    console.log(`Received request to ${route}`);
     
     // Pass through any authorization headers that might be present
     if (req.headers.authorization) {
@@ -68,8 +99,11 @@ routes.forEach(route => {
       model: "message-relay",
     };
     
+    // Handle stream parameter, defaulting to false if not present
+    const isStreamingRequest = req.body && req.body.stream === true;
+    
     // Handle non-streaming requests
-    if (req.body.stream === false || !req.body.stream) {
+    if (!isStreamingRequest) {
       console.log('Sending non-streaming response');
       return res.json({
         ...responseObj,
@@ -144,7 +178,12 @@ app.use('*', (req, res) => {
 // Error handling middleware
 app.use((err, req, res, next) => {
   console.error('Error:', err);
-  res.status(500).send('Server error');
+  res.status(500).json({
+    error: {
+      message: 'An internal server error occurred',
+      status: 500
+    }
+  });
 });
 
 // Start the server
